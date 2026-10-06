@@ -45,6 +45,7 @@ const setChannelCommand = new SlashCommandBuilder()
 
 const commands = [panelCommand.toJSON(), setChannelCommand.toJSON()];
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const correctionPrompts = new Map();
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`로그인: ${readyClient.user.tag}`);
@@ -108,6 +109,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
           components: [new ActionRowBuilder().addComponents(select)],
           flags: MessageFlags.Ephemeral,
         });
+        const prompt = await interaction.fetchReply();
+        const promptKey = correctionPromptKey(interaction);
+        correctionPrompts.set(promptKey, {
+          webhook: interaction.webhook,
+          messageId: prompt.id,
+        });
+        setTimeout(() => correctionPrompts.delete(promptKey), 15 * 60 * 1000).unref?.();
         return;
       }
       const nickname =
@@ -144,7 +152,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
       await interaction.showModal(buildModal(report, role, correctionType));
-      await interaction.message.delete().catch(() => {});
       return;
     }
 
@@ -273,7 +280,26 @@ async function submitReport(interaction) {
   } catch (error) {
     console.error("대시보드 반영 실패", error);
   }
+  if (report.correctionChoice) {
+    await deleteCorrectionPrompt(interaction);
+  }
   await interaction.deleteReply().catch(() => {});
+}
+
+function correctionPromptKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
+}
+
+async function deleteCorrectionPrompt(interaction) {
+  const key = correctionPromptKey(interaction);
+  const prompt = correctionPrompts.get(key);
+  if (!prompt) {
+    return;
+  }
+  correctionPrompts.delete(key);
+  await prompt.webhook.deleteMessage(prompt.messageId).catch((error) => {
+    console.warn("정정 유형 선택 메시지를 삭제하지 못했습니다.", error.message);
+  });
 }
 
 function attendancePatch(reportId, reportDate, correction = null) {
