@@ -1,0 +1,17 @@
+[Unit]
+Description=Discord report bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/opt/discord-report-bot
+EnvironmentFile=/opt/discord-report-bot/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
