@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const channelsFile = path.resolve("data/channels.json");
-const allowedTypes = new Set(["daily", "correction", "close", "absent"]);
+const allowedTypes = new Set(["daily", "close", "absent"]);
 
 function readChannels() {
   if (!fs.existsSync(channelsFile)) {

@@ -37,7 +37,6 @@ const setChannelCommand = new SlashCommandBuilder()
       .setRequired(true)
       .addChoices(
         { name: "Daily", value: "daily" },
-        { name: "Correction", value: "correction" },
         { name: "Close", value: "close" },
         { name: "Absent", value: "absent" },
       ),
@@ -216,7 +215,7 @@ async function submitReport(interaction) {
 
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-  const channelType = report.channelType ?? report.id;
+  const channelType = report.correctionChoice ? correctionType : report.channelType ?? report.id;
   const channelId = getReportChannel(channelType);
   if (!channelId) {
     await interaction.editReply(`/setchannel 명령으로 ${channelType} 채널을 먼저 설정해 주세요.`);
