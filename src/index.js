@@ -1,5 +1,6 @@
 import "dotenv/config";
 import {
+  ActionRowBuilder,
   Client,
   EmbedBuilder,
   Events,
@@ -7,6 +8,7 @@ import {
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
 } from "discord.js";
 import { getReportChannel, setReportChannel } from "./channels.js";
 import { loadConfig } from "./config.js";
@@ -93,6 +95,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
         return;
       }
+      if (report.correctionChoice) {
+        const select = new StringSelectMenuBuilder()
+          .setCustomId("correction:type")
+          .setPlaceholder("정정할 보고를 선택하세요")
+          .addOptions(
+            { label: "업무 보고 정정", value: "daily" },
+            { label: "업무 마감 정정", value: "close" },
+          );
+        await interaction.reply({
+          content: "정정할 보고 유형을 선택하세요.",
+          components: [new ActionRowBuilder().addComponents(select)],
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       const nickname =
         interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
       let role = workbook.roleForNickname(nickname);
@@ -110,6 +127,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return;
     }
 
+    if (interaction.isStringSelectMenu() && interaction.customId === "correction:type") {
+      const correctionType = interaction.values[0];
+      const report = findReport("correction");
+      const nickname =
+        interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+      let role = workbook.roleForNickname(nickname);
+      if (!role) {
+        role = await workbook.refreshRoleForNickname(nickname);
+      }
+      if (!role || !config.roles.includes(role)) {
+        await interaction.reply({
+          content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      await interaction.showModal(buildModal(report, role, correctionType));
+      await interaction.message.delete().catch(() => {});
+      return;
+    }
+
     if (interaction.isModalSubmit() && interaction.customId.startsWith("modal:")) {
       await submitReport(interaction);
     }
@@ -120,10 +158,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 async function submitReport(interaction) {
-  const [, reportId, openedAtText] = interaction.customId.split(":");
+  const [, reportId, openedAtText, correctionType] = interaction.customId.split(":");
   const report = findReport(reportId);
   const openedAt = Number(openedAtText);
-  if (!report || !Number.isFinite(openedAt)) {
+  const validCorrection =
+    !report?.correctionChoice || correctionType === "daily" || correctionType === "close";
+  if (!report || !Number.isFinite(openedAt) || !validCorrection) {
     await interaction.reply({
       content: "알 수 없는 보고 양식입니다.",
       flags: MessageFlags.Ephemeral,
@@ -131,23 +171,23 @@ async function submitReport(interaction) {
     return;
   }
 
-  const correctionTimes = report.correctionTimes
-    ? {
-        clockIn: normalizeClockTime(interaction.fields.getTextInputValue("clockIn")),
-        clockOut: normalizeClockTime(interaction.fields.getTextInputValue("clockOut")),
-      }
+  const correctionTime = report.correctionChoice
+    ? normalizeClockTime(
+        interaction.fields.getTextInputValue(correctionType === "daily" ? "clockIn" : "clockOut"),
+      )
     : null;
   const openedDate = formatSeoulNow(new Date(openedAt));
-  const reportDate = correctionTimes
-    ? `${openedDate.slice(0, 10)} 출근 ${correctionTimes.clockIn ?? "-"} / 퇴근 ${correctionTimes.clockOut ?? "-"}`
+  const correctionLabel = correctionType === "daily" ? "출근시간" : "퇴근시간";
+  const reportDate = report.correctionChoice
+    ? `${openedDate.slice(0, 10)} ${correctionLabel} ${correctionTime ?? "-"}`
     : openedDate;
   const content = interaction.fields.getTextInputValue("content").trim();
   const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
   const role = workbook.roleForNickname(nickname);
 
-  if (correctionTimes && (!correctionTimes.clockIn || !correctionTimes.clockOut)) {
+  if (report.correctionChoice && !correctionTime) {
     await interaction.reply({
-      content: "출근시간과 퇴근시간을 `09:00`, `18:00` 형식으로 입력해 주세요.",
+      content: `${correctionLabel}을 \`09:00\` 형식으로 입력해 주세요.`,
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -188,11 +228,11 @@ async function submitReport(interaction) {
       new EmbedBuilder()
         .setColor(0x2b2d31)
         .addFields(
-          ...(correctionTimes
+          ...(report.correctionChoice
             ? [
                 {
                   name: "정정일자",
-                  value: `${openedDate.slice(0, 10)}\n${correctionTimes.clockIn} ~ ${correctionTimes.clockOut}`,
+                  value: `${openedDate.slice(0, 10)}\n${correctionLabel} ${correctionTime}`,
                 },
               ]
             : [{ name: "보고 일자", value: reportDate }]),
@@ -205,7 +245,11 @@ async function submitReport(interaction) {
   try {
     await workbook.appendLog([
       formatSeoulNow(),
-      report.buttonLabel,
+      report.correctionChoice
+        ? correctionType === "daily"
+          ? "업무 보고 정정"
+          : "업무 마감 정정"
+        : report.buttonLabel,
       nickname,
       role,
       content,
@@ -221,7 +265,7 @@ async function submitReport(interaction) {
   try {
     const attendance = await workbook.recordAttendance(
       nickname,
-      attendancePatch(report.id, reportDate, correctionTimes),
+      attendancePatch(report.id, reportDate, { type: correctionType, time: correctionTime }),
     );
     if (attendance !== "updated") {
       console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
@@ -232,13 +276,14 @@ async function submitReport(interaction) {
   await interaction.deleteReply().catch(() => {});
 }
 
-function attendancePatch(reportId, reportDate, correctionTimes = null) {
+function attendancePatch(reportId, reportDate, correction = null) {
   const judgedAt = formatSeoulNow();
   const time = clockTime(reportDate);
   if (reportId === "correction") {
     return {
-      clockIn: correctionTimes.clockIn,
-      clockOut: correctionTimes.clockOut,
+      ...(correction.type === "daily"
+        ? { clockIn: correction.time }
+        : { clockOut: correction.time }),
       judgedAt,
       corrected: true,
     };

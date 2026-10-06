@@ -19,7 +19,7 @@ export const REPORTS = [
         id: "correction",
         buttonLabel: "업무 정정 보고",
         modalTitle: "업무 정정 보고",
-    correctionTimes: true,
+    correctionChoice: true,
         contentLabel: "정정 업무",
         outputLabel: "업무 정정 내용",
         contentPlaceholder: "정정할 업무 내용을 입력하세요",

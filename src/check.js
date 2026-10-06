@@ -4,22 +4,23 @@ import { matchScore, pickPerson } from "./match.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
-  const json = buildModal(report, "수습 연구원").toJSON();
-  const expectedCount = report.correctionTimes ? 4 : 3;
-  if (json.components.length !== expectedCount) {
-    throw new Error(`${report.id} 모달 구성 요소가 ${expectedCount}개가 아닙니다.`);
+  const json = buildModal(report, "수습 연구원", report.correctionChoice ? "daily" : null).toJSON();
+  if (json.components.length !== 3) {
+    throw new Error(`${report.id} 모달 구성 요소가 3개가 아닙니다.`);
   }
   if (!json.components.some((component) => component.content?.includes("수습 연구원"))) {
     throw new Error("대시보드 역할이 모달에 읽기 전용으로 표시되지 않았습니다.");
   }
 }
 
-const correction = buildModal(REPORTS.find((report) => report.id === "correction"), "수습 연구원").toJSON();
+const correctionReport = REPORTS.find((report) => report.id === "correction");
+const correction = buildModal(correctionReport, "수습 연구원", "daily").toJSON();
+const closeCorrection = buildModal(correctionReport, "수습 연구원", "close").toJSON();
 if (
   correction.components[0].component?.custom_id !== "clockIn" ||
-  correction.components[1].component?.custom_id !== "clockOut"
+  closeCorrection.components[0].component?.custom_id !== "clockOut"
 ) {
-  throw new Error("업무 정정 보고의 출퇴근시간 입력칸이 없습니다.");
+  throw new Error("정정 유형에 맞는 시간 입력칸이 없습니다.");
 }
 
 const date = normalizeReportDate("2026.9.29 13:00");
