@@ -5,7 +5,16 @@ import { seoulDayKey } from "./format.js";
 import { pickPerson } from "./match.js";
 
 const LOG_HEADERS = ["작성시각", "보고유형", "디스코드닉네임", "역할", "내용", "메시지링크", "보고일자"];
-const DASHBOARD_HEADERS = ["직무", "이름", "현재 상태", "출근시간", "퇴근시간", "판정 시각", "정정 여부"];
+const DASHBOARD_HEADERS = [
+  "직무",
+  "이름",
+  "현재 상태",
+  "출근시간",
+  "퇴근시간",
+  "판정 시각",
+  "정정 여부",
+  "불참 여부",
+];
 const ABSENT = "미출근";
 const statePath = path.resolve("data/dashboard-day.json");
 const FIRST_ROSTER_ROLES = new Map([
@@ -92,7 +101,7 @@ export function createWorkbook(config) {
     }
   }
 
-  async function ensureDashboardCheckbox() {
+  async function ensureDashboardCheckboxes() {
     await request(config.spreadsheetId, ":batchUpdate", {
       method: "POST",
       body: JSON.stringify({
@@ -103,7 +112,7 @@ export function createWorkbook(config) {
                 sheetId: config.dashboardSheetId,
                 startRowIndex: 1,
                 startColumnIndex: 6,
-                endColumnIndex: 7,
+                endColumnIndex: 8,
               },
               cell: {
                 dataValidation: {
@@ -169,6 +178,7 @@ export function createWorkbook(config) {
       clockOut: String(row[4] ?? "").trim() || "-",
       judgedAt: String(row[5] ?? "").trim() || "-",
       corrected: row[6] === true || String(row[6] ?? "").toUpperCase() === "TRUE",
+      absent: row[7] === true || String(row[7] ?? "").toUpperCase() === "TRUE",
     })).filter((person) => person.name);
   }
 
@@ -181,6 +191,7 @@ export function createWorkbook(config) {
       person.clockOut,
       person.judgedAt,
       Boolean(person.corrected),
+      Boolean(person.absent),
     ];
   }
 
@@ -199,8 +210,8 @@ export function createWorkbook(config) {
       }),
       rosterPeople(secondValues, 2, () => "수습 연구원"),
     );
-    await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:G1");
-    const current = dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:G"));
+    await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1");
+    const current = dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:H"));
     const merged = roster.map((person) => {
       const existing = current.find((row) => row.name === person.name);
       if (!existing || resetTimes) {
@@ -212,17 +223,18 @@ export function createWorkbook(config) {
           clockOut: "-",
           judgedAt: "-",
           corrected: false,
+          absent: false,
         };
       }
       return { ...existing, job: person.job || existing.job, name: person.name };
     });
-    await writeValues(config.spreadsheetId, dashboardTitle, `A1:G${Math.max(merged.length + 1, 1)}`, [
+    await writeValues(config.spreadsheetId, dashboardTitle, `A1:H${Math.max(merged.length + 1, 1)}`, [
       DASHBOARD_HEADERS,
       ...merged.map(toCells),
     ]);
-    await ensureDashboardCheckbox();
+    await ensureDashboardCheckboxes();
     if (current.length > merged.length) {
-      await clearValues(config.spreadsheetId, dashboardTitle, `A${merged.length + 2}:G1000`);
+      await clearValues(config.spreadsheetId, dashboardTitle, `A${merged.length + 2}:H1000`);
     }
     dashboardCache = merged;
     return merged;
@@ -240,13 +252,13 @@ export function createWorkbook(config) {
 
   async function markAttendance(nickname, patch) {
     const title = await sheetTitle(config.spreadsheetId, config.dashboardSheetId);
-    const people = dashboardRows(await readValues(config.spreadsheetId, title, "A:G"));
+    const people = dashboardRows(await readValues(config.spreadsheetId, title, "A:H"));
     const picked = pickPerson(nickname, people);
     if (picked.status !== "found") {
       return picked.status;
     }
     const person = { ...people[picked.index], ...patch };
-    await writeValues(config.spreadsheetId, title, `A${picked.index + 2}:G${picked.index + 2}`, [toCells(person)]);
+    await writeValues(config.spreadsheetId, title, `A${picked.index + 2}:H${picked.index + 2}`, [toCells(person)]);
     dashboardCache = people.map((item, index) => (index === picked.index ? person : item));
     return "updated";
   }

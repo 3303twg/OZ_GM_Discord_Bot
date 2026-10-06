@@ -249,7 +249,7 @@ function attendancePatch(reportId, reportDate, correctionTimes = null) {
   if (reportId === "close") {
     return { status: "퇴근", clockOut: time, judgedAt };
   }
-  return { status: "불참", judgedAt };
+  return { status: "불참", judgedAt, absent: true };
 }
 
 async function replyError(interaction, content) {
