@@ -300,6 +300,24 @@ async function submitReport(interaction) {
     return;
   }
 
+  if (absenceDates) {
+    try {
+      await workbook.appendAbsence([
+        formatSeoulNow(),
+        displayNameKey(nickname),
+        role,
+        absenceDates.absence,
+        absenceDates.replacement,
+        content,
+        message.url,
+      ]);
+    } catch (error) {
+      console.error("불참 일정 기록 실패", error);
+      await interaction.editReply("보고는 전송됐지만 업무불참 시트 기록에 실패했습니다.");
+      return;
+    }
+  }
+
   const today = seoulDayKey().replaceAll("-", ".");
   const shouldUpdateDashboard = report.id !== "absent" || absenceDates.absence === today;
   if (shouldUpdateDashboard) {

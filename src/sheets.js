@@ -15,6 +15,16 @@ const LOG_HEADERS = [
   "불참날짜",
   "대체업무 진행날짜",
 ];
+const ABSENCE_SHEET_TITLE = "업무불참";
+const ABSENCE_HEADERS = [
+  "작성시각",
+  "이름",
+  "역할",
+  "불참날짜",
+  "대체업무 진행날짜",
+  "불참사유",
+  "메시지링크",
+];
 const DASHBOARD_HEADERS = [
   "직무",
   "이름",
@@ -38,8 +48,11 @@ export function createWorkbook(config) {
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   const titles = new Map();
+  const namedTitles = new Set();
   let chain = Promise.resolve();
   let dashboardCache = [];
+  let todayAbsenceNames = new Set();
+  let absenceScheduleLoaded = false;
 
   function enqueue(task) {
     const run = chain.then(task, task);
@@ -84,6 +97,25 @@ export function createWorkbook(config) {
     }
     titles.set(key, sheet.properties.title);
     return sheet.properties.title;
+  }
+
+  async function ensureSheetByTitle(spreadsheetId, title) {
+    const key = `${spreadsheetId}:${title}`;
+    if (namedTitles.has(key)) {
+      return title;
+    }
+    const metadata = await request(spreadsheetId, "?fields=sheets.properties.title");
+    const exists = metadata.sheets?.some((sheet) => sheet.properties.title === title);
+    if (!exists) {
+      await request(spreadsheetId, ":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: [{ addSheet: { properties: { title } } }],
+        }),
+      });
+    }
+    namedTitles.add(key);
+    return title;
   }
 
   async function readValues(spreadsheetId, title, a1) {
@@ -205,27 +237,6 @@ export function createWorkbook(config) {
     ];
   }
 
-  async function latestAbsenceNamesForDate(targetDate) {
-    const logTitle = await sheetTitle(config.spreadsheetId, config.logSheetId);
-    const rows = await readValues(config.spreadsheetId, logTitle, "A:I");
-    const latestByName = new Map();
-    for (let index = rows.length - 1; index >= 1; index -= 1) {
-      const row = rows[index];
-      if (String(row[1] ?? "").trim() !== "업무 불참 보고") {
-        continue;
-      }
-      const name = String(row[2] ?? "").trim().toLowerCase();
-      if (name && !latestByName.has(name)) {
-        latestByName.set(name, String(row[7] ?? "").trim());
-      }
-    }
-    return new Set(
-      [...latestByName.entries()]
-        .filter(([, absenceDate]) => absenceDate === targetDate)
-        .map(([name]) => name),
-    );
-  }
-
   async function syncRoster(resetTimes) {
     const firstRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.rosterSheetId);
     const secondRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.secondRosterSheetId);
@@ -241,14 +252,12 @@ export function createWorkbook(config) {
       }),
       rosterPeople(secondValues, 2, () => "수습 연구원"),
     );
-    const today = seoulDayKey().replaceAll("-", ".");
-    const scheduledAbsences = await latestAbsenceNamesForDate(today);
     await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1");
     const current = dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:H"));
     const merged = roster.map((person) => {
       const existing = current.find((row) => row.name === person.name);
       if (!existing || resetTimes) {
-        const isAbsent = scheduledAbsences.has(person.name.toLowerCase());
+        const isAbsent = todayAbsenceNames.has(person.name.toLowerCase());
         return {
           job: person.job,
           name: person.name,
@@ -260,7 +269,7 @@ export function createWorkbook(config) {
           absent: isAbsent,
         };
       }
-      if (scheduledAbsences.has(person.name.toLowerCase())) {
+      if (todayAbsenceNames.has(person.name.toLowerCase())) {
         return {
           ...existing,
           job: person.job || existing.job,
@@ -294,6 +303,49 @@ export function createWorkbook(config) {
     );
   }
 
+  async function appendAbsence(row) {
+    const title = await ensureSheetByTitle(config.spreadsheetId, ABSENCE_SHEET_TITLE);
+    await ensureHeader(config.spreadsheetId, title, ABSENCE_HEADERS, "A1:G1");
+    await request(
+      config.spreadsheetId,
+      `/values/${rangeOf(title, "A:G")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      { method: "POST", body: JSON.stringify({ values: [row] }) },
+    );
+    const name = String(row[1] ?? "").trim().toLowerCase();
+    const absenceDate = String(row[3] ?? "").trim();
+    const today = seoulDayKey().replaceAll("-", ".");
+    if (name && absenceDate === today) {
+      todayAbsenceNames.add(name);
+    }
+  }
+
+  async function refreshAbsenceSchedule(targetDate) {
+    const title = await ensureSheetByTitle(config.spreadsheetId, ABSENCE_SHEET_TITLE);
+    await ensureHeader(config.spreadsheetId, title, ABSENCE_HEADERS, "A1:G1");
+    const rows = await readValues(config.spreadsheetId, title, "A:G");
+    const entries = rows.slice(1);
+    const active = entries.filter((row) => {
+      const absenceDate = String(row[3] ?? "").trim();
+      return !absenceDate || absenceDate >= targetDate;
+    });
+
+    if (active.length !== entries.length) {
+      await writeValues(config.spreadsheetId, title, `A1:G${active.length + 1}`, [
+        ABSENCE_HEADERS,
+        ...active,
+      ]);
+      await clearValues(config.spreadsheetId, title, `A${active.length + 2}:G${entries.length + 1}`);
+    }
+
+    todayAbsenceNames = new Set(
+      active
+        .filter((row) => String(row[3] ?? "").trim() === targetDate)
+        .map((row) => String(row[1] ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    );
+    absenceScheduleLoaded = true;
+  }
+
   async function markAttendance(nickname, patch) {
     const title = await sheetTitle(config.spreadsheetId, config.dashboardSheetId);
     const people = dashboardRows(await readValues(config.spreadsheetId, title, "A:H"));
@@ -311,11 +363,15 @@ export function createWorkbook(config) {
     const today = seoulDayKey();
     const saved = readDay();
     if (saved === today) {
+      if (!absenceScheduleLoaded) {
+        await refreshAbsenceSchedule(today.replaceAll("-", "."));
+      }
       if (dashboardCache.length === 0) {
         await syncRoster(false);
       }
       return;
     }
+    await refreshAbsenceSchedule(today.replaceAll("-", "."));
     await syncRoster(saved !== null);
     writeDay(today);
     console.log(saved === null ? "대시보드 명단을 채웠습니다." : "자정이 지나 출근·퇴근 시각을 비웠습니다.");
@@ -335,6 +391,9 @@ export function createWorkbook(config) {
     },
     appendLog(row) {
       return enqueue(() => appendLog(row));
+    },
+    appendAbsence(row) {
+      return enqueue(() => appendAbsence(row));
     },
     async recordAttendance(nickname, patch) {
       return enqueue(async () => {
