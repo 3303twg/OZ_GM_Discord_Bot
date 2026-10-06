@@ -1,6 +1,6 @@
 import { buildModal } from "./modal.js";
 import { clockTime, normalizeClockTime, normalizeReportDate, toBulletList } from "./format.js";
-import { matchScore, pickPerson } from "./match.js";
+import { displayNameKey, matchScore, pickPerson } from "./match.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
@@ -47,6 +47,9 @@ if (matchScore("주환서_러닝헬퍼", "주환서") !== 2 || matchScore("주�
 }
 if (matchScore("다른사람_주환서", "주환서") !== 0 || matchScore("주환서러닝헬퍼", "주환서") !== 0) {
   throw new Error("언더바 앞부분만 비교해야 합니다.");
+}
+if (displayNameKey("Song Junho_조교") !== "Song Junho") {
+  throw new Error("로그용 디스코드 이름 추출에 실패했습니다.");
 }
 const picked = pickPerson("주환서_러닝헬퍼", [{ name: "김민수" }, { name: "주환서" }]);
 if (picked.status !== "found" || picked.index !== 1) {

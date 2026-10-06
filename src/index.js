@@ -14,6 +14,7 @@ import { getReportChannel, setReportChannel } from "./channels.js";
 import { loadConfig } from "./config.js";
 import { clockTime, formatSeoulNow, normalizeClockTime, toBulletList } from "./format.js";
 import { buildModal } from "./modal.js";
+import { displayNameKey } from "./match.js";
 import { ensurePanel } from "./panel.js";
 import { findReport } from "./reports.js";
 import { createWorkbook } from "./sheets.js";
@@ -256,7 +257,7 @@ async function submitReport(interaction) {
           ? "업무 보고 정정"
           : "업무 마감 정정"
         : report.buttonLabel,
-      nickname,
+      displayNameKey(nickname),
       role,
       content,
       message.url,

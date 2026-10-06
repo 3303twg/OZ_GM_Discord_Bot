@@ -1,7 +1,11 @@
-export function nameKey(discordName) {
+export function displayNameKey(discordName) {
   const nickname = discordName.trim();
   const underscore = nickname.indexOf("_");
-  return (underscore === -1 ? nickname : nickname.slice(0, underscore)).trim().toLowerCase();
+  return (underscore === -1 ? nickname : nickname.slice(0, underscore)).trim();
+}
+
+export function nameKey(discordName) {
+  return displayNameKey(discordName).toLowerCase();
 }
 
 export function matchScore(discordName, rosterName) {
