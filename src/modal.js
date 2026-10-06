@@ -34,6 +34,29 @@ export function buildModal(report, role, correctionType = null) {
     `**역할**\n\`\`\`\n${role}\n\`\`\``,
   );
 
+  const absenceDateComponents = report.absenceDates
+    ? [
+        new LabelBuilder().setLabel("불참날짜").setTextInputComponent(
+          new TextInputBuilder()
+            .setCustomId("absenceDate")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMinLength(3)
+            .setMaxLength(8)
+            .setPlaceholder("10.07"),
+        ),
+        new LabelBuilder().setLabel("대체업무 진행날짜").setTextInputComponent(
+          new TextInputBuilder()
+            .setCustomId("replacementDate")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true)
+            .setMinLength(3)
+            .setMaxLength(8)
+            .setPlaceholder("10.08"),
+        ),
+      ]
+    : [];
+
   const content = new LabelBuilder().setLabel(report.contentLabel).setTextInputComponent(
     new TextInputBuilder()
       .setCustomId("content")
@@ -47,5 +70,5 @@ export function buildModal(report, role, correctionType = null) {
   return new ModalBuilder()
     .setCustomId(`modal:${report.id}:${openedAt}${correctionType ? `:${correctionType}` : ""}`)
     .setTitle(report.modalTitle)
-    .addComponents(...dateComponents, roleDisplay, content);
+    .addComponents(...dateComponents, roleDisplay, ...absenceDateComponents, content);
 }

@@ -12,7 +12,14 @@ import {
 } from "discord.js";
 import { getReportChannel, setReportChannel } from "./channels.js";
 import { loadConfig } from "./config.js";
-import { clockTime, formatSeoulNow, normalizeClockTime, toBulletList } from "./format.js";
+import {
+  clockTime,
+  formatSeoulNow,
+  normalizeClockTime,
+  normalizeMonthDay,
+  seoulDayKey,
+  toBulletList,
+} from "./format.js";
 import { buildModal } from "./modal.js";
 import { displayNameKey } from "./match.js";
 import { ensurePanel } from "./panel.js";
@@ -183,6 +190,15 @@ async function submitReport(interaction) {
         interaction.fields.getTextInputValue(correctionType === "daily" ? "clockIn" : "clockOut"),
       )
     : null;
+  const absenceDates = report.absenceDates
+    ? {
+        absence: normalizeMonthDay(interaction.fields.getTextInputValue("absenceDate"), new Date(openedAt)),
+        replacement: normalizeMonthDay(
+          interaction.fields.getTextInputValue("replacementDate"),
+          new Date(openedAt),
+        ),
+      }
+    : null;
   const openedDate = formatSeoulNow(new Date(openedAt));
   const correctionLabel = correctionType === "daily" ? "출근시간" : "퇴근시간";
   const reportDate = report.correctionChoice
@@ -195,6 +211,13 @@ async function submitReport(interaction) {
   if (report.correctionChoice && !correctionTime) {
     await interaction.reply({
       content: `${correctionLabel}을 \`09:00\` 형식으로 입력해 주세요.`,
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+  if (absenceDates && (!absenceDates.absence || !absenceDates.replacement)) {
+    await interaction.reply({
+      content: "불참날짜와 대체업무 진행날짜를 `10.07` 형식으로 입력해 주세요.",
       flags: MessageFlags.Ephemeral,
     });
     return;
@@ -244,6 +267,12 @@ async function submitReport(interaction) {
               ]
             : [{ name: "보고 일자", value: reportDate }]),
           { name: "역할", value: role },
+          ...(absenceDates
+            ? [
+                { name: "불참날짜", value: absenceDates.absence },
+                { name: "대체업무 진행날짜", value: absenceDates.replacement },
+              ]
+            : []),
           { name: report.outputLabel, value: toBulletList(content) },
         ),
     ],
@@ -262,6 +291,8 @@ async function submitReport(interaction) {
       content,
       message.url,
       reportDate,
+      absenceDates?.absence ?? "",
+      absenceDates?.replacement ?? "",
     ]);
   } catch (error) {
     console.error("시트 기록 실패", error);
@@ -269,16 +300,20 @@ async function submitReport(interaction) {
     return;
   }
 
-  try {
-    const attendance = await workbook.recordAttendance(
-      nickname,
-      attendancePatch(report.id, reportDate, { type: correctionType, time: correctionTime }),
-    );
-    if (attendance !== "updated") {
-      console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
+  const today = seoulDayKey().replaceAll("-", ".");
+  const shouldUpdateDashboard = report.id !== "absent" || absenceDates.absence === today;
+  if (shouldUpdateDashboard) {
+    try {
+      const attendance = await workbook.recordAttendance(
+        nickname,
+        attendancePatch(report.id, reportDate, { type: correctionType, time: correctionTime }),
+      );
+      if (attendance !== "updated") {
+        console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
+      }
+    } catch (error) {
+      console.error("대시보드 반영 실패", error);
     }
-  } catch (error) {
-    console.error("대시보드 반영 실패", error);
   }
   if (report.correctionChoice) {
     await deleteCorrectionPrompt(interaction);

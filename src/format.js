@@ -28,6 +28,42 @@ export function seoulDayKey(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+export function normalizeMonthDay(input, now = new Date()) {
+  const match = input.trim().match(/^(\d{1,2})(?:[./-]|월\s*)(\d{1,2})(?:일)?$/);
+  if (!match) {
+    return null;
+  }
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const today = seoulParts(now);
+  let year = Number(today.year);
+
+  function validDate(targetYear) {
+    const date = new Date(Date.UTC(targetYear, month - 1, day));
+    return (
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      date.getUTCFullYear() === targetYear &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    );
+  }
+
+  if (!validDate(year)) {
+    return null;
+  }
+  const pad = (number) => String(number).padStart(2, "0");
+  const monthDay = `${pad(month)}.${pad(day)}`;
+  if (monthDay < `${today.month}.${today.day}`) {
+    year += 1;
+    if (!validDate(year)) {
+      return null;
+    }
+  }
+  return `${year}.${monthDay}`;
+}
+
 export function clockTime(reportDate) {
   const match = reportDate.match(/(\d{2}):(\d{2})$/);
   return match ? `${match[1]}:${match[2]}` : reportDate;

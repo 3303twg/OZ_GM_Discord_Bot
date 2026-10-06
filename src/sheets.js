@@ -1,10 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GoogleAuth } from "google-auth-library";
-import { seoulDayKey } from "./format.js";
+import { formatSeoulNow, seoulDayKey } from "./format.js";
 import { pickPerson } from "./match.js";
 
-const LOG_HEADERS = ["작성시각", "보고유형", "디스코드닉네임", "역할", "내용", "메시지링크", "보고일자"];
+const LOG_HEADERS = [
+  "작성시각",
+  "보고유형",
+  "디스코드닉네임",
+  "역할",
+  "내용",
+  "메시지링크",
+  "보고일자",
+  "불참날짜",
+  "대체업무 진행날짜",
+];
 const DASHBOARD_HEADERS = [
   "직무",
   "이름",
@@ -195,6 +205,27 @@ export function createWorkbook(config) {
     ];
   }
 
+  async function latestAbsenceNamesForDate(targetDate) {
+    const logTitle = await sheetTitle(config.spreadsheetId, config.logSheetId);
+    const rows = await readValues(config.spreadsheetId, logTitle, "A:I");
+    const latestByName = new Map();
+    for (let index = rows.length - 1; index >= 1; index -= 1) {
+      const row = rows[index];
+      if (String(row[1] ?? "").trim() !== "업무 불참 보고") {
+        continue;
+      }
+      const name = String(row[2] ?? "").trim().toLowerCase();
+      if (name && !latestByName.has(name)) {
+        latestByName.set(name, String(row[7] ?? "").trim());
+      }
+    }
+    return new Set(
+      [...latestByName.entries()]
+        .filter(([, absenceDate]) => absenceDate === targetDate)
+        .map(([name]) => name),
+    );
+  }
+
   async function syncRoster(resetTimes) {
     const firstRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.rosterSheetId);
     const secondRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.secondRosterSheetId);
@@ -210,20 +241,25 @@ export function createWorkbook(config) {
       }),
       rosterPeople(secondValues, 2, () => "수습 연구원"),
     );
+    const today = seoulDayKey().replaceAll("-", ".");
+    const scheduledAbsences = resetTimes
+      ? await latestAbsenceNamesForDate(today)
+      : new Set();
     await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1");
     const current = dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:H"));
     const merged = roster.map((person) => {
       const existing = current.find((row) => row.name === person.name);
       if (!existing || resetTimes) {
+        const isAbsent = scheduledAbsences.has(person.name.toLowerCase());
         return {
           job: person.job,
           name: person.name,
-          status: ABSENT,
+          status: isAbsent ? "불참" : ABSENT,
           clockIn: "-",
           clockOut: "-",
-          judgedAt: "-",
+          judgedAt: isAbsent ? formatSeoulNow() : "-",
           corrected: false,
-          absent: false,
+          absent: isAbsent,
         };
       }
       return { ...existing, job: person.job || existing.job, name: person.name };
@@ -242,10 +278,10 @@ export function createWorkbook(config) {
 
   async function appendLog(row) {
     const title = await sheetTitle(config.spreadsheetId, config.logSheetId);
-    await ensureHeader(config.spreadsheetId, title, LOG_HEADERS, "A1:G1");
+    await ensureHeader(config.spreadsheetId, title, LOG_HEADERS, "A1:I1");
     await request(
       config.spreadsheetId,
-      `/values/${rangeOf(title, "A:G")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
+      `/values/${rangeOf(title, "A:I")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       { method: "POST", body: JSON.stringify({ values: [row] }) },
     );
   }

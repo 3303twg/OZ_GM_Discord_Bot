@@ -1,16 +1,32 @@
 import { buildModal } from "./modal.js";
-import { clockTime, normalizeClockTime, normalizeReportDate, toBulletList } from "./format.js";
+import {
+  clockTime,
+  normalizeClockTime,
+  normalizeMonthDay,
+  normalizeReportDate,
+  toBulletList,
+} from "./format.js";
 import { displayNameKey, matchScore, pickPerson } from "./match.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
   const json = buildModal(report, "수습 연구원", report.correctionChoice ? "daily" : null).toJSON();
-  if (json.components.length !== 3) {
-    throw new Error(`${report.id} 모달 구성 요소가 3개가 아닙니다.`);
+  const expectedCount = report.absenceDates ? 5 : 3;
+  if (json.components.length !== expectedCount) {
+    throw new Error(`${report.id} 모달 구성 요소가 ${expectedCount}개가 아닙니다.`);
   }
   if (!json.components.some((component) => component.content?.includes("수습 연구원"))) {
     throw new Error("대시보드 역할이 모달에 읽기 전용으로 표시되지 않았습니다.");
   }
+}
+
+const absentReport = REPORTS.find((report) => report.id === "absent");
+const absentModal = buildModal(absentReport, "수습 연구원").toJSON();
+if (
+  absentModal.components[2].component?.custom_id !== "absenceDate" ||
+  absentModal.components[3].component?.custom_id !== "replacementDate"
+) {
+  throw new Error("불참 보고 날짜 입력칸이 없습니다.");
 }
 
 const correctionReport = REPORTS.find((report) => report.id === "correction");
@@ -41,6 +57,14 @@ if (clockTime("2026.09.29 13:05") !== "13:05") {
 }
 if (normalizeClockTime("9:05") !== "09:05" || normalizeClockTime("25:00") !== null) {
   throw new Error("출퇴근시간 정규화에 실패했습니다.");
+}
+const fixedNow = new Date("2026-10-06T06:00:00Z");
+if (
+  normalizeMonthDay("10.07", fixedNow) !== "2026.10.07" ||
+  normalizeMonthDay("1월 2일", fixedNow) !== "2027.01.02" ||
+  normalizeMonthDay("2.30", fixedNow) !== null
+) {
+  throw new Error("월일 정규화에 실패했습니다.");
 }
 if (matchScore("주환서_러닝헬퍼", "주환서") !== 2 || matchScore("주환서", "주환서") !== 2) {
   throw new Error("이름 비교 점수가 예상과 다릅니다.");

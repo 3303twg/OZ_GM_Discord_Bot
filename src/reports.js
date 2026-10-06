@@ -28,6 +28,7 @@ export const REPORTS = [
     id: "absent",
     buttonLabel: "업무 불참 보고",
     modalTitle: "업무 불참 보고",
+    absenceDates: true,
     contentLabel: "불참 사유",
     outputLabel: "불참 사유",
     contentPlaceholder: "불참 사유를 입력하세요",
