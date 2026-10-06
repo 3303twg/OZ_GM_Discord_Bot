@@ -242,9 +242,7 @@ export function createWorkbook(config) {
       rosterPeople(secondValues, 2, () => "수습 연구원"),
     );
     const today = seoulDayKey().replaceAll("-", ".");
-    const scheduledAbsences = resetTimes
-      ? await latestAbsenceNamesForDate(today)
-      : new Set();
+    const scheduledAbsences = await latestAbsenceNamesForDate(today);
     await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1");
     const current = dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:H"));
     const merged = roster.map((person) => {
@@ -260,6 +258,16 @@ export function createWorkbook(config) {
           judgedAt: isAbsent ? formatSeoulNow() : "-",
           corrected: false,
           absent: isAbsent,
+        };
+      }
+      if (scheduledAbsences.has(person.name.toLowerCase())) {
+        return {
+          ...existing,
+          job: person.job || existing.job,
+          name: person.name,
+          status: "불참",
+          judgedAt: existing.status === "불참" ? existing.judgedAt : formatSeoulNow(),
+          absent: true,
         };
       }
       return { ...existing, job: person.job || existing.job, name: person.name };
