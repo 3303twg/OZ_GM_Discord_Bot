@@ -440,6 +440,48 @@ export function createWorkbook(config) {
       await clearValues(config.spreadsheetId, dashboardTitle, `A${people.length + 2}:H1000`);
     }
     lastDashboardSize = people.length;
+    await refreshDashboardFilter(people.length);
+  }
+
+  async function refreshDashboardFilter(rowCount) {
+    try {
+      const metadata = await request(
+        config.spreadsheetId,
+        "?fields=sheets(properties.sheetId,basicFilter(range,sortSpecs,criteria,filterSpecs))",
+      );
+      const sheet = metadata.sheets?.find((item) => item.properties.sheetId === config.dashboardSheetId);
+      const filter = sheet?.basicFilter;
+      if (!filter) {
+        return;
+      }
+      const range = {
+        sheetId: config.dashboardSheetId,
+        startRowIndex: filter.range?.startRowIndex ?? 0,
+        endRowIndex: Math.max(filter.range?.endRowIndex ?? 0, rowCount + 1),
+        startColumnIndex: filter.range?.startColumnIndex ?? 0,
+        endColumnIndex: Math.max(filter.range?.endColumnIndex ?? 0, 8),
+      };
+      await request(config.spreadsheetId, ":batchUpdate", {
+        method: "POST",
+        body: JSON.stringify({
+          requests: [
+            { clearBasicFilter: { sheetId: config.dashboardSheetId } },
+            {
+              setBasicFilter: {
+                filter: {
+                  range,
+                  ...(filter.sortSpecs ? { sortSpecs: filter.sortSpecs } : {}),
+                  ...(filter.criteria ? { criteria: filter.criteria } : {}),
+                  ...(filter.filterSpecs ? { filterSpecs: filter.filterSpecs } : {}),
+                },
+              },
+            },
+          ],
+        }),
+      });
+    } catch (error) {
+      console.error("대시보드 필터를 다시 적용하지 못했습니다.", error);
+    }
   }
 
   async function syncRoster(resetTimes, { write }) {
