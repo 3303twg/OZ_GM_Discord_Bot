@@ -682,6 +682,22 @@ export function createWorkbook(config) {
       const picked = pickPerson(nickname, dashboardCache);
       return picked.status === "found" ? dashboardCache[picked.index].job : null;
     },
+    reloadRoster() {
+      return enqueue(async () => {
+        try {
+          await refreshAbsenceSchedule(seoulDayKey().replaceAll("-", "."));
+          await syncRoster(false, { write: true });
+          dashboardReady = true;
+          return { ok: true, count: dashboardCache.length };
+        } catch (error) {
+          console.error("원본 명단 갱신 실패", error);
+          if (rosterDirty) {
+            armFlush(FLUSH_RETRY_MS);
+          }
+          return { ok: false, reason: "failed" };
+        }
+      });
+    },
     flushNow() {
       return enqueue(async () => {
         if (!dashboardReady || dashboardCache.length === 0) {

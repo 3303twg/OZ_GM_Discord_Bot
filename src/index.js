@@ -34,6 +34,11 @@ const panelCommand = new SlashCommandBuilder()
   .setDescription("현재 채널에 보고 버튼을 올립니다.")
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
+const reloadCommand = new SlashCommandBuilder()
+  .setName("reload")
+  .setDescription("원본 명단을 다시 읽어 대시보드 인원을 갱신합니다.")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+
 const flushCommand = new SlashCommandBuilder()
   .setName("flush")
   .setDescription("모아 둔 캐시를 시트에 바로 기록합니다.")
@@ -55,7 +60,7 @@ const setChannelCommand = new SlashCommandBuilder()
       ),
   );
 
-const commands = [panelCommand.toJSON(), setChannelCommand.toJSON(), flushCommand.toJSON()];
+const commands = [panelCommand.toJSON(), setChannelCommand.toJSON(), flushCommand.toJSON(), reloadCommand.toJSON()];
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const correctionPrompts = new Map();
 
@@ -86,6 +91,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: "현재 채널에 보고 버튼을 올렸습니다.",
         flags: MessageFlags.Ephemeral,
       });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === "reload") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const result = await workbook.reloadRoster();
+      if (!result.ok) {
+        await interaction.editReply("원본 명단을 불러오지 못했습니다. 잠시 뒤 다시 시도해 주세요.");
+        return;
+      }
+      await interaction.editReply(`원본 명단을 대시보드에 반영했습니다. 현재 ${result.count}명입니다.`);
       return;
     }
 
