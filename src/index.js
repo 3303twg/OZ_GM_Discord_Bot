@@ -34,6 +34,11 @@ const panelCommand = new SlashCommandBuilder()
   .setDescription("현재 채널에 보고 버튼을 올립니다.")
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
 
+const flushCommand = new SlashCommandBuilder()
+  .setName("flush")
+  .setDescription("모아 둔 캐시를 시트에 바로 기록합니다.")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+
 const setChannelCommand = new SlashCommandBuilder()
   .setName("setchannel")
   .setDescription("현재 채널을 보고 결과 채널로 설정합니다.")
@@ -50,7 +55,7 @@ const setChannelCommand = new SlashCommandBuilder()
       ),
   );
 
-const commands = [panelCommand.toJSON(), setChannelCommand.toJSON()];
+const commands = [panelCommand.toJSON(), setChannelCommand.toJSON(), flushCommand.toJSON()];
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const correctionPrompts = new Map();
 
@@ -81,6 +86,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: "현재 채널에 보고 버튼을 올렸습니다.",
         flags: MessageFlags.Ephemeral,
       });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === "flush") {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const result = await workbook.flushNow();
+      if (!result.ok && result.reason === "loading") {
+        await interaction.editReply("대시보드 명단을 불러오는 중입니다. 잠시 뒤 다시 시도해 주세요.");
+        return;
+      }
+      if (!result.ok) {
+        await interaction.editReply("시트 반영에 실패했습니다. 모아 둔 기록은 유지했고 잠시 뒤 다시 시도합니다.");
+        return;
+      }
+      const dashboardText = result.dashboardWritten ? "대시보드 갱신" : "대시보드 변경 없음";
+      await interaction.editReply(
+        `시트에 반영했습니다. 로그 ${result.logCount}건, 불참 ${result.absenceCount}건, ${dashboardText}.`,
+      );
       return;
     }
 
@@ -125,17 +148,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         setTimeout(() => correctionPrompts.delete(promptKey), 15 * 60 * 1000).unref?.();
         return;
       }
-      const nickname =
-        interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
-      let role = workbook.roleForNickname(nickname);
+      const role = await roleFromDashboard(interaction);
       if (!role) {
-        role = await workbook.refreshRoleForNickname(nickname);
-      }
-      if (!role || !config.roles.includes(role)) {
-        await interaction.reply({
-          content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
-          flags: MessageFlags.Ephemeral,
-        });
         return;
       }
       await interaction.showModal(buildModal(report, role));
@@ -145,17 +159,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isStringSelectMenu() && interaction.customId === "correction:type") {
       const correctionType = interaction.values[0];
       const report = findReport("correction");
-      const nickname =
-        interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
-      let role = workbook.roleForNickname(nickname);
+      const role = await roleFromDashboard(interaction);
       if (!role) {
-        role = await workbook.refreshRoleForNickname(nickname);
-      }
-      if (!role || !config.roles.includes(role)) {
-        await interaction.reply({
-          content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
-          flags: MessageFlags.Ephemeral,
-        });
         return;
       }
       await interaction.showModal(buildModal(report, role, correctionType));
@@ -206,6 +211,13 @@ async function submitReport(interaction) {
     : openedDate;
   const content = interaction.fields.getTextInputValue("content").trim();
   const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+  if (!workbook.isDashboardReady()) {
+    await interaction.reply({
+      content: "대시보드 명단을 불러오는 중입니다. 잠시 뒤 다시 시도해 주세요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
   const role = workbook.roleForNickname(nickname);
 
   if (report.correctionChoice && !correctionTime) {
@@ -278,65 +290,71 @@ async function submitReport(interaction) {
     ],
   });
 
-  try {
-    await workbook.appendLog([
-      formatSeoulNow(),
-      report.correctionChoice
-        ? correctionType === "daily"
-          ? "업무 보고 정정"
-          : "업무 마감 정정"
-        : report.buttonLabel,
-      displayNameKey(nickname),
-      role,
-      content,
-      message.url,
-      reportDate,
-      absenceDates?.absence ?? "",
-      absenceDates?.replacement ?? "",
-    ]);
-  } catch (error) {
-    console.error("시트 기록 실패", error);
-    await interaction.deleteReply().catch(() => {});
-    return;
-  }
-
-  if (absenceDates) {
-    try {
-      await workbook.appendAbsence([
-        formatSeoulNow(),
-        displayNameKey(nickname),
-        role,
-        absenceDates.absence,
-        absenceDates.replacement,
-        content,
-        message.url,
-      ]);
-    } catch (error) {
-      console.error("불참 일정 기록 실패", error);
-      await interaction.editReply("보고는 전송됐지만 업무불참 시트 기록에 실패했습니다.");
-      return;
-    }
-  }
-
   const today = seoulDayKey().replaceAll("-", ".");
   const shouldUpdateDashboard = report.id !== "absent" || absenceDates.absence === today;
-  if (shouldUpdateDashboard) {
-    try {
-      const attendance = await workbook.recordAttendance(
-        nickname,
-        attendancePatch(report.id, reportDate, { type: correctionType, time: correctionTime }),
-      );
-      if (attendance !== "updated") {
-        console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
-      }
-    } catch (error) {
-      console.error("대시보드 반영 실패", error);
+  try {
+    const attendance = workbook.noteReport({
+      logRow: [
+        formatSeoulNow(),
+        report.correctionChoice
+          ? correctionType === "daily"
+            ? "업무 보고 정정"
+            : "업무 마감 정정"
+          : report.buttonLabel,
+        displayNameKey(nickname),
+        role,
+        content,
+        message.url,
+        reportDate,
+        absenceDates?.absence ?? "",
+        absenceDates?.replacement ?? "",
+      ],
+      absenceRow: absenceDates
+        ? [
+            formatSeoulNow(),
+            displayNameKey(nickname),
+            role,
+            absenceDates.absence,
+            absenceDates.replacement,
+            content,
+            message.url,
+          ]
+        : null,
+      nickname,
+      patch: shouldUpdateDashboard
+        ? attendancePatch(report.id, reportDate, { type: correctionType, time: correctionTime })
+        : null,
+    });
+    if (attendance !== "updated" && attendance !== "skipped") {
+      console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
     }
+  } catch (error) {
+    console.error("보고 대기열 기록 실패", error);
   }
   if (report.correctionChoice) {
     await deleteCorrectionPrompt(interaction);
   }
   await interaction.deleteReply().catch(() => {});
+}
+
+async function roleFromDashboard(interaction) {
+  if (!workbook.isDashboardReady()) {
+    await interaction.reply({
+      content: "대시보드 명단을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return null;
+  }
+  const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+  const role = workbook.roleForNickname(nickname);
+  if (!role || !config.roles.includes(role)) {
+    await interaction.reply({
+      content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
+      flags: MessageFlags.Ephemeral,
+    });
+    return null;
+  }
+  return role;
 }
 
 function correctionPromptKey(interaction) {

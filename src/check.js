@@ -7,6 +7,7 @@ import {
   toBulletList,
 } from "./format.js";
 import { displayNameKey, matchScore, pickPerson } from "./match.js";
+import { applyPeoplePatch, mergeDashboard, rosterDataRows, secondRosterJob } from "./sheets.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
@@ -78,6 +79,68 @@ if (displayNameKey("Song Junho_조교") !== "Song Junho") {
 const picked = pickPerson("주환서_러닝헬퍼", [{ name: "김민수" }, { name: "주환서" }]);
 if (picked.status !== "found" || picked.index !== 1) {
   throw new Error("대시보드 대상 찾기에 실패했습니다.");
+}
+
+const dashboardPerson = {
+  job: "러닝헬퍼",
+  name: "주환서",
+  status: "퇴근",
+  clockIn: "09:00",
+  clockOut: "18:00",
+  judgedAt: "2026.10.07 18:00",
+  corrected: false,
+  absent: false,
+};
+const roster = [{ name: "주환서", job: "러닝헬퍼" }];
+const kept = mergeDashboard(roster, [dashboardPerson], {
+  resetTimes: false,
+  absentNames: new Set(),
+  now: "-",
+});
+if (kept[0].clockOut !== "18:00") {
+  throw new Error("명단 갱신이 퇴근시간을 지웠습니다.");
+}
+const reset = mergeDashboard(roster, [dashboardPerson], {
+  resetTimes: true,
+  absentNames: new Set(),
+  now: "-",
+});
+if (reset[0].clockOut !== "-" || reset[0].status !== "미출근") {
+  throw new Error("자정 초기화가 퇴근시간을 비우지 않았습니다.");
+}
+const absent = mergeDashboard(roster, [dashboardPerson], {
+  resetTimes: false,
+  absentNames: new Set(["주환서"]),
+  now: "2026.10.07 00:00",
+});
+if (absent[0].status !== "불참" || absent[0].clockOut !== "18:00" || absent[0].absent !== true) {
+  throw new Error("불참 갱신이 기존 시각을 잃었습니다.");
+}
+const patched = applyPeoplePatch([dashboardPerson], "주환서_러닝헬퍼", {
+  status: "퇴근",
+  clockOut: "19:00",
+  judgedAt: "2026.10.07 19:00",
+});
+if (patched.status !== "updated" || patched.people[0].clockOut !== "19:00" || patched.people[0].clockIn !== "09:00") {
+  throw new Error("퇴근 반영이 해당 시각만 고치지 않았습니다.");
+}
+const missed = applyPeoplePatch([dashboardPerson], "없는사람", { clockOut: "19:00" });
+if (missed.status !== "not_found" || missed.people[0].clockOut !== "18:00") {
+  throw new Error("없는 닉네임이 대시보드를 바꿨습니다.");
+}
+if (secondRosterJob("디자이너") !== "디자이너 러닝헬퍼" || secondRosterJob("개발자") !== "수습 연구원") {
+  throw new Error("지원 유형별 역할이 예상과 다릅니다.");
+}
+const thirdSheet = [
+  ["안내"],
+  ["", "지원자 이름", "", "", "", "", "", "", "", "", "", "", "", "근무 현황"],
+  ["예시", "예시", "", "", "", "", "", "", "", "", "", "", "", "예시"],
+  ["", "김근무", "", "", "", "", "", "", "", "", "", "", "", "근무중"],
+  ["", "김종료", "", "", "", "", "", "", "", "", "", "", "", "근무종료"],
+];
+const thirdRows = rosterDataRows(thirdSheet, 1, 13);
+if (thirdRows.length !== 3 || thirdRows[1][1] !== "김근무") {
+  throw new Error("명단 헤더 위를 데이터로 읽었습니다.");
 }
 
 console.log("확인 완료");
