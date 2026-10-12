@@ -34,11 +34,7 @@ export function loadConfig() {
     logSheetId: Number(process.env.LOG_SHEET_GID || 0),
     dashboardSheetId: Number(process.env.DASHBOARD_SHEET_GID || 218253518),
     rosterSpreadsheetId: process.env.ROSTER_SPREADSHEET_ID?.trim() || "1ANwZJNE7521MF8xmAGsKIZE27MRCC6Ezl9peYc5W75s",
-    rosterSheetId: Number(process.env.ROSTER_SHEET_GID || 2107231157),
-    secondRosterSheetId: Number(process.env.SECOND_ROSTER_SHEET_GID || 2007394471),
-    thirdRosterSpreadsheetId:
-      process.env.THIRD_ROSTER_SPREADSHEET_ID?.trim() || "1TP56kkbfB_NjKFM57tFCcGAVr5vjmCIcmFiKVfnh88Y",
-    thirdRosterSheetId: Number(process.env.THIRD_ROSTER_SHEET_GID || 0),
+    rosterSheetId: Number(process.env.ROSTER_SHEET_GID || 118837736),
     serviceAccountPath: keyPath,
     roles,
   };

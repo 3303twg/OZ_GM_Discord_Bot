@@ -41,30 +41,41 @@ const FLUSH_RETRY_MS = 60_000;
 const ROSTER_REFRESH_MS = 5 * 60_000;
 const statePath = path.resolve("data/dashboard-day.json");
 const pendingPath = path.resolve("data/pending-writes.json");
-const FIRST_ROSTER_ROLES = new Map([
-  ["교육자료 리뷰어", "리뷰어"],
-  ["러닝헬퍼(단기 조교)", "러닝헬퍼"],
-]);
-const THIRD_ROSTER_JOB = "디자이너 러닝헬퍼";
+const ROSTER_HEADER_ROW = 10;
+const ROSTER_NAME_INDEX = 1;
+const ROSTER_JOB_INDEX = 3;
+const ROSTER_STATUS_INDEX = 7;
 
-export function secondRosterJob(track) {
-  const value = String(track ?? "").replace(/\s+/g, "");
-  if (value === "디자이너") {
-    return THIRD_ROSTER_JOB;
+export function rosterPeopleFromSheet(values) {
+  const headerIndex = rosterHeaderIndex(values);
+  if (headerIndex < 0) {
+    return [];
   }
-  if (value === "개발자") {
-    return "수습 연구원";
+  const people = new Map();
+  for (const row of values.slice(headerIndex + 1)) {
+    const name = String(row[ROSTER_NAME_INDEX] ?? "").trim();
+    const job = String(row[ROSTER_JOB_INDEX] ?? "").trim();
+    const employment = String(row[ROSTER_STATUS_INDEX] ?? "").replace(/\s+/g, "");
+    if (!name || employment !== "근무중" || people.has(name)) {
+      continue;
+    }
+    people.set(name, { name, job });
   }
-  return String(track ?? "").trim();
+  return [...people.values()];
 }
 
-export function rosterDataRows(values, nameIndex, statusIndex) {
-  const headerIndex = values.findIndex((row) => String(row[nameIndex] ?? "").replace(/\s+/g, "").includes("이름"));
-  if (headerIndex >= 0) {
-    return values.slice(headerIndex + 1);
+function rosterHeaderIndex(values) {
+  const marked = values[ROSTER_HEADER_ROW - 1] ?? [];
+  if (isRosterHeader(marked)) {
+    return ROSTER_HEADER_ROW - 1;
   }
-  const firstStatus = String(values[0]?.[statusIndex] ?? "").replace(/\s+/g, "");
-  return firstStatus === "근무중" ? values : values.slice(1);
+  return values.findIndex((row) => isRosterHeader(row));
+}
+
+function isRosterHeader(row) {
+  const name = String(row[ROSTER_NAME_INDEX] ?? "").replace(/\s+/g, "");
+  const status = String(row[ROSTER_STATUS_INDEX] ?? "").replace(/\s+/g, "");
+  return name.includes("이름") && status.includes("근무");
 }
 
 export function applyPeoplePatch(people, nickname, patch) {
@@ -344,32 +355,6 @@ export function createWorkbook(config) {
     fs.writeFileSync(statePath, JSON.stringify({ date }, null, 2));
   }
 
-  function rosterPeople(values, nameIndex, statusIndex, roleOf) {
-    if (!values.length) {
-      return [];
-    }
-    return rosterDataRows(values, nameIndex, statusIndex)
-      .map((row) => ({
-        job: roleOf(row),
-        name: String(row[nameIndex] ?? "").trim(),
-        employment: String(row[statusIndex] ?? "").replace(/\s+/g, ""),
-      }))
-      .filter((person) => person.name && person.employment === "근무중");
-  }
-
-  function mergeRosterPeople(...groups) {
-    const people = new Map();
-    for (const person of groups.flat()) {
-      const existing = people.get(person.name);
-      if (!existing) {
-        people.set(person.name, person);
-      } else if (!existing.job && person.job) {
-        people.set(person.name, { ...existing, job: person.job });
-      }
-    }
-    return [...people.values()];
-  }
-
   function dashboardRows(values) {
     return values
       .slice(1)
@@ -410,22 +395,23 @@ export function createWorkbook(config) {
   }
 
   async function loadRoster() {
-    const firstRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.rosterSheetId);
-    const secondRosterTitle = await sheetTitle(config.rosterSpreadsheetId, config.secondRosterSheetId);
-    const thirdRosterTitle = await sheetTitle(config.thirdRosterSpreadsheetId, config.thirdRosterSheetId);
-    const [firstValues, secondValues, thirdValues] = await Promise.all([
-      readValues(config.rosterSpreadsheetId, firstRosterTitle, "A:L"),
-      readValues(config.rosterSpreadsheetId, secondRosterTitle, "A:L"),
-      readValues(config.thirdRosterSpreadsheetId, thirdRosterTitle, "A:N"),
-    ]);
-    return mergeRosterPeople(
-      rosterPeople(firstValues, 1, 11, (row) => {
-        const sourceRole = String(row[3] ?? "").trim();
-        return FIRST_ROSTER_ROLES.get(sourceRole) ?? sourceRole;
+    const body = await request(config.rosterSpreadsheetId, "/values:batchGetByDataFilter", {
+      method: "POST",
+      body: JSON.stringify({
+        dataFilters: [
+          {
+            gridRange: {
+              sheetId: config.rosterSheetId,
+              startColumnIndex: 0,
+              endColumnIndex: ROSTER_STATUS_INDEX + 1,
+            },
+          },
+        ],
+        majorDimension: "ROWS",
       }),
-      rosterPeople(secondValues, 2, 11, (row) => secondRosterJob(row[9])),
-      rosterPeople(thirdValues, 1, 13, () => THIRD_ROSTER_JOB),
-    );
+    });
+    const values = body.valueRanges?.[0]?.valueRange?.values ?? [];
+    return rosterPeopleFromSheet(values);
   }
 
   async function writeDashboard(people) {

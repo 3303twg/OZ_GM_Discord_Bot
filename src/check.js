@@ -7,7 +7,7 @@ import {
   toBulletList,
 } from "./format.js";
 import { displayNameKey, matchScore, pickPerson } from "./match.js";
-import { applyPeoplePatch, mergeDashboard, rosterDataRows, secondRosterJob } from "./sheets.js";
+import { applyPeoplePatch, mergeDashboard, rosterPeopleFromSheet } from "./sheets.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
@@ -128,19 +128,20 @@ const missed = applyPeoplePatch([dashboardPerson], "없는사람", { clockOut: "
 if (missed.status !== "not_found" || missed.people[0].clockOut !== "18:00") {
   throw new Error("없는 닉네임이 대시보드를 바꿨습니다.");
 }
-if (secondRosterJob("디자이너") !== "디자이너 러닝헬퍼" || secondRosterJob("개발자") !== "수습 연구원") {
-  throw new Error("지원 유형별 역할이 예상과 다릅니다.");
-}
-const thirdSheet = [
-  ["안내"],
-  ["", "지원자 이름", "", "", "", "", "", "", "", "", "", "", "", "근무 현황"],
-  ["예시", "예시", "", "", "", "", "", "", "", "", "", "", "", "예시"],
-  ["", "김근무", "", "", "", "", "", "", "", "", "", "", "", "근무중"],
-  ["", "김종료", "", "", "", "", "", "", "", "", "", "", "", "근무종료"],
-];
-const thirdRows = rosterDataRows(thirdSheet, 1, 13);
-if (thirdRows.length !== 3 || thirdRows[1][1] !== "김근무") {
-  throw new Error("명단 헤더 위를 데이터로 읽었습니다.");
+const rosterSheet = Array.from({ length: 9 }, () => ["안내", "예전 이름"]);
+rosterSheet.push(["", "이름", "", "지원직무", "", "", "", "근무 상태"]);
+rosterSheet.push(["", "김근무", "", "리뷰어", "", "", "", "근무중"]);
+rosterSheet.push(["", "김종료", "", "리뷰어", "", "", "", "근무종료"]);
+rosterSheet.push(["", "김디자인", "", "디자인 러닝헬퍼", "", "", "", "근무 중"]);
+rosterSheet.push(["", "김근무", "", "수습 연구원", "", "", "", "근무중"]);
+const unifiedRoster = rosterPeopleFromSheet(rosterSheet);
+if (
+  unifiedRoster.length !== 2 ||
+  unifiedRoster[0].name !== "김근무" ||
+  unifiedRoster[0].job !== "리뷰어" ||
+  unifiedRoster[1].job !== "디자인 러닝헬퍼"
+) {
+  throw new Error("통합 명단에서 근무중 인원과 직무를 읽지 못했습니다.");
 }
 
 console.log("확인 완료");
