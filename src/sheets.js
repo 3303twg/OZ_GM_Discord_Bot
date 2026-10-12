@@ -132,7 +132,6 @@ export function createWorkbook(config) {
   let todayAbsenceNames = new Set();
   let absenceScheduleLoaded = false;
   let dashboardReady = false;
-  let dashboardValidationReady = false;
   let lastDashboardSize = null;
   let rosterDirty = false;
   let flushTimer = null;
@@ -311,10 +310,7 @@ export function createWorkbook(config) {
     readyHeaders.add(headerKey);
   }
 
-  async function ensureDashboardCheckboxes() {
-    if (dashboardValidationReady) {
-      return;
-    }
+  async function formatDashboard() {
     await request(config.spreadsheetId, ":batchUpdate", {
       method: "POST",
       body: JSON.stringify({
@@ -337,10 +333,24 @@ export function createWorkbook(config) {
               fields: "dataValidation",
             },
           },
+          {
+            repeatCell: {
+              range: {
+                sheetId: config.dashboardSheetId,
+                startColumnIndex: 0,
+                endColumnIndex: 9,
+              },
+              cell: {
+                userEnteredFormat: {
+                  horizontalAlignment: "CENTER",
+                },
+              },
+              fields: "userEnteredFormat.horizontalAlignment",
+            },
+          },
         ],
       }),
     });
-    dashboardValidationReady = true;
   }
 
   function readDay() {
@@ -421,7 +431,7 @@ export function createWorkbook(config) {
       DASHBOARD_HEADERS,
       ...people.map(toCells),
     ]);
-    await ensureDashboardCheckboxes();
+    await formatDashboard();
     if (lastDashboardSize === null || people.length < lastDashboardSize) {
       await clearValues(config.spreadsheetId, dashboardTitle, `A${people.length + 2}:H1000`);
     }
