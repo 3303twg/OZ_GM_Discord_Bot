@@ -77,12 +77,15 @@ export function lookupReviewerTask(cache, nickname) {
   return taskAllowsClose(person.value) ? "done" : "pending";
 }
 
-export function decideReviewerClose({ status, readsInWindow, limit = TASK_READ_LIMIT }) {
+export function decideReviewerClose({ status, readsInWindow, cacheFresh = false, limit = TASK_READ_LIMIT }) {
   if (status === "done" || status === "no_column") {
     return "allow";
   }
   if (status === "pending") {
-    return "block";
+    return readsInWindow < limit ? "refresh" : "block";
+  }
+  if (status === "missing" && cacheFresh) {
+    return "missing";
   }
   return readsInWindow < limit ? "refresh" : "retry";
 }

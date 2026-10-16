@@ -171,8 +171,11 @@ if (taskAllowsClose(0) || taskAllowsClose("0") || !taskAllowsClose("1") || !task
 if (decideReviewerClose({ status: "done", readsInWindow: 30 }) !== "allow") {
   throw new Error("캐시에 있는 완료 작업을 읽기 제한 때문에 막았습니다.");
 }
-if (decideReviewerClose({ status: "pending", readsInWindow: 0 }) !== "block") {
-  throw new Error("캐시에 남은 작업을 통과시켰습니다.");
+if (decideReviewerClose({ status: "pending", readsInWindow: 0 }) !== "refresh") {
+  throw new Error("남은 작업이 캐시에 있어도 30회 미만이면 시트를 다시 읽어야 합니다.");
+}
+if (decideReviewerClose({ status: "pending", readsInWindow: 30 }) !== "block") {
+  throw new Error("읽기 30회 이후에는 캐시의 남은 작업으로 막아야 합니다.");
 }
 if (decideReviewerClose({ status: "missing", readsInWindow: 29 }) !== "refresh") {
   throw new Error("캐시에 없을 때 갱신을 시도하지 않았습니다.");

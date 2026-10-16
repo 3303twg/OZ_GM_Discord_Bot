@@ -5,6 +5,7 @@ import { formatSeoulNow, seoulDayKey } from "./format.js";
 import { pickPerson } from "./match.js";
 import {
   TASK_READ_LIMIT,
+  decideReviewerClose,
   gridOrigin,
   lookupReviewerTask,
   parseTaskSheet,
@@ -787,19 +788,19 @@ export function createWorkbook(config) {
   }
 
   async function reviewClose(nickname) {
-    const now = Date.now();
     const status = lookupReviewerTask(taskCache, nickname);
-    const reads = taskReadsInWindow(now);
-    const known = status === "done" || status === "pending" || status === "no_column";
-    if (known && (taskCacheFresh(now) || reads >= TASK_READ_LIMIT)) {
-      return status === "pending" ? "block" : "allow";
-    }
-    if (!known && reads >= TASK_READ_LIMIT) {
+    const decision = decideReviewerClose({
+      status,
+      readsInWindow: taskReadsInWindow(),
+      cacheFresh: taskCacheFresh(),
+      limit: TASK_READ_LIMIT,
+    });
+    if (decision === "retry") {
       scheduleTaskRefresh();
       return "retry";
     }
-    if (status === "missing" && taskCacheFresh(now)) {
-      return "missing";
+    if (decision !== "refresh") {
+      return decision;
     }
     try {
       await loadReviewerTasks();
