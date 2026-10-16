@@ -293,7 +293,9 @@ async function submitReport(interaction) {
   if (report.id === "close" && role === "리뷰어") {
     const task = await workbook.checkReviewerClose(nickname);
     if (task === "block") {
-      await interaction.editReply("일일 수행해야 하는 Task가 남아 있어 마감 보고를 할 수 없습니다.");
+      await interaction.editReply(
+        "일일 수행해야 하는 Task가 남아 있어 마감 보고를 할 수 없습니다.\n금일 진행한 Task 리뷰 제출을 완료해주시기 바랍니다.",
+      );
       return;
     }
     if (task === "retry") {
