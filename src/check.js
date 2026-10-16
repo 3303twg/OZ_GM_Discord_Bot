@@ -8,6 +8,12 @@ import {
 } from "./format.js";
 import { displayNameKey, matchScore, pickPerson } from "./match.js";
 import { applyPeoplePatch, mergeDashboard, rosterPeopleFromSheet } from "./sheets.js";
+import {
+  decideReviewerClose,
+  lookupReviewerTask,
+  parseTaskSheet,
+  taskAllowsClose,
+} from "./reviewer-tasks.js";
 import { REPORTS } from "./reports.js";
 
 for (const report of REPORTS) {
@@ -142,6 +148,40 @@ if (
   unifiedRoster[1].job !== "디자인 러닝헬퍼"
 ) {
   throw new Error("통합 명단에서 근무중 인원과 직무를 읽지 못했습니다.");
+}
+
+const taskRows = Array.from({ length: 13 }, () => []);
+taskRows.push(["", "", "10/12", "10/13", "10/14", "10/15", "10/16", "10/17", "10/18"]);
+taskRows.push(["김리뷰", "", "1", "1", "1", "1", "진행중"]);
+taskRows.push(["김완료", "", "1", "1", "1", "1", "2"]);
+taskRows.push(["김공백", "", "1", "1", "1", "1", ""]);
+const taskCache = parseTaskSheet(taskRows, { today: "2026-10-16" });
+if (lookupReviewerTask(taskCache, "김리뷰_리뷰어") !== "pending") {
+  throw new Error("진행중인 오늘 작업을 마감 가능으로 봤습니다.");
+}
+if (lookupReviewerTask(taskCache, "김완료") !== "done") {
+  throw new Error("1 이상인 오늘 작업을 마감 불가로 봤습니다.");
+}
+if (lookupReviewerTask(taskCache, "김공백") !== "pending") {
+  throw new Error("빈 오늘 작업을 마감 가능으로 봤습니다.");
+}
+if (taskAllowsClose(0) || taskAllowsClose("0") || !taskAllowsClose("1") || !taskAllowsClose(3)) {
+  throw new Error("작업 수량 판정이 1 미만을 통과시켰습니다.");
+}
+if (decideReviewerClose({ status: "done", readsInWindow: 30 }) !== "allow") {
+  throw new Error("캐시에 있는 완료 작업을 읽기 제한 때문에 막았습니다.");
+}
+if (decideReviewerClose({ status: "pending", readsInWindow: 0 }) !== "block") {
+  throw new Error("캐시에 남은 작업을 통과시켰습니다.");
+}
+if (decideReviewerClose({ status: "missing", readsInWindow: 29 }) !== "refresh") {
+  throw new Error("캐시에 없을 때 갱신을 시도하지 않았습니다.");
+}
+if (decideReviewerClose({ status: "missing", readsInWindow: 30 }) !== "retry") {
+  throw new Error("읽기 30회 이후에도 즉시 갱신을 시도했습니다.");
+}
+if (decideReviewerClose({ status: "unloaded", readsInWindow: 30 }) !== "retry") {
+  throw new Error("빈 캐시에서 30회 이후 재시도 안내로 가지 않았습니다.");
 }
 
 console.log("확인 완료");

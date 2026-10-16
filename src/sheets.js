@@ -3,6 +3,12 @@ import path from "node:path";
 import { GoogleAuth } from "google-auth-library";
 import { formatSeoulNow, seoulDayKey } from "./format.js";
 import { pickPerson } from "./match.js";
+import {
+  TASK_READ_LIMIT,
+  gridOrigin,
+  lookupReviewerTask,
+  parseTaskSheet,
+} from "./reviewer-tasks.js";
 
 const LOG_HEADERS = [
   "작성시각",
@@ -39,6 +45,8 @@ const ABSENT = "미출근";
 const FLUSH_WINDOW_MS = 60_000;
 const FLUSH_RETRY_MS = 60_000;
 const ROSTER_REFRESH_MS = 5 * 60_000;
+const TASK_READ_WINDOW_MS = 60_000;
+const TASK_REFRESH_DELAY_MS = 60_000;
 const statePath = path.resolve("data/dashboard-day.json");
 const pendingPath = path.resolve("data/pending-writes.json");
 const ROSTER_HEADER_ROW = 10;
@@ -135,6 +143,10 @@ export function createWorkbook(config) {
   let lastDashboardSize = null;
   let rosterDirty = false;
   let flushTimer = null;
+  let taskCache = { loaded: false, column: null, people: [], loadedAt: 0 };
+  let taskReadTimes = [];
+  let taskRefreshTimer = null;
+  let taskColumnWarned = false;
   const pending = { logs: [], absences: [], patches: [] };
 
   loadPending();
@@ -712,6 +724,95 @@ export function createWorkbook(config) {
     }
   }
 
+  function taskReadsInWindow(now = Date.now()) {
+    taskReadTimes = taskReadTimes.filter((time) => now - time < TASK_READ_WINDOW_MS);
+    return taskReadTimes.length;
+  }
+
+  function clearTaskRefresh() {
+    if (!taskRefreshTimer) {
+      return;
+    }
+    clearTimeout(taskRefreshTimer);
+    taskRefreshTimer = null;
+  }
+
+  function scheduleTaskRefresh() {
+    if (taskRefreshTimer) {
+      return;
+    }
+    taskRefreshTimer = setTimeout(() => {
+      taskRefreshTimer = null;
+      enqueue(() => loadReviewerTasks()).catch((error) => {
+        console.error("리뷰어 작업 현황 갱신 실패", error);
+      });
+    }, TASK_REFRESH_DELAY_MS);
+    taskRefreshTimer.unref?.();
+  }
+
+  async function loadReviewerTasks() {
+    taskReadTimes.push(Date.now());
+    const response = await sheets.spreadsheets.values.batchGetByDataFilter({
+      spreadsheetId: config.taskSpreadsheetId,
+      requestBody: {
+        dataFilters: [
+          {
+            gridRange: {
+              sheetId: config.taskSheetId,
+              startColumnIndex: 15,
+              endColumnIndex: 24,
+            },
+          },
+        ],
+      },
+    });
+    const valueRange = response.data.valueRanges?.[0]?.valueRange ?? {};
+    const origin = gridOrigin(valueRange.range);
+    taskCache = parseTaskSheet(valueRange.values ?? [], {
+      startRow: origin.startRow,
+      startColumn: origin.startColumn,
+      today: seoulDayKey(),
+    });
+    taskCache.loadedAt = Date.now();
+    clearTaskRefresh();
+    if (taskCache.column == null && !taskColumnWarned) {
+      taskColumnWarned = true;
+      console.error("리뷰어 작업 시트에서 오늘 날짜 열을 찾지 못했습니다.");
+    }
+  }
+
+  function taskCacheFresh(now = Date.now()) {
+    return taskCache.loaded && now - taskCache.loadedAt < TASK_READ_WINDOW_MS;
+  }
+
+  async function reviewClose(nickname) {
+    const now = Date.now();
+    const status = lookupReviewerTask(taskCache, nickname);
+    const reads = taskReadsInWindow(now);
+    const known = status === "done" || status === "pending" || status === "no_column";
+    if (known && (taskCacheFresh(now) || reads >= TASK_READ_LIMIT)) {
+      return status === "pending" ? "block" : "allow";
+    }
+    if (!known && reads >= TASK_READ_LIMIT) {
+      scheduleTaskRefresh();
+      return "retry";
+    }
+    if (status === "missing" && taskCacheFresh(now)) {
+      return "missing";
+    }
+    try {
+      await loadReviewerTasks();
+    } catch (error) {
+      console.error("리뷰어 작업 현황을 읽지 못했습니다.", error);
+      return status === "pending" ? "block" : "allow";
+    }
+    const next = lookupReviewerTask(taskCache, nickname);
+    if (next === "missing") {
+      return "missing";
+    }
+    return next === "pending" ? "block" : "allow";
+  }
+
   return {
     isDashboardReady() {
       return dashboardReady;
@@ -719,6 +820,9 @@ export function createWorkbook(config) {
     roleForNickname(nickname) {
       const picked = pickPerson(nickname, dashboardCache);
       return picked.status === "found" ? dashboardCache[picked.index].job : null;
+    },
+    checkReviewerClose(nickname) {
+      return enqueue(() => reviewClose(nickname));
     },
     reloadRoster() {
       return enqueue(async () => {

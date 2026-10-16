@@ -35,6 +35,9 @@ export function loadConfig() {
     dashboardSheetId: Number(process.env.DASHBOARD_SHEET_GID || 218253518),
     rosterSpreadsheetId: process.env.ROSTER_SPREADSHEET_ID?.trim() || "1ANwZJNE7521MF8xmAGsKIZE27MRCC6Ezl9peYc5W75s",
     rosterSheetId: Number(process.env.ROSTER_SHEET_GID || 118837736),
+    taskSpreadsheetId:
+      process.env.TASK_SPREADSHEET_ID?.trim() || "1lLk5bKzsr1o_lBZSQKeYZh62zbzhyQtBo_hQhRB5V9M",
+    taskSheetId: Number(process.env.TASK_SHEET_GID || 2114634129),
     serviceAccountPath: keyPath,
     roles,
   };

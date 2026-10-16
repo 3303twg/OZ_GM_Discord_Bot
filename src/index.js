@@ -278,6 +278,21 @@ async function submitReport(interaction) {
     await interaction.editReply("결과를 올릴 채널을 찾지 못했습니다. 채널 ID 설정을 확인해 주세요.");
     return;
   }
+  if (report.id === "close" && role === "리뷰어") {
+    const task = await workbook.checkReviewerClose(nickname);
+    if (task === "block") {
+      await interaction.editReply("일일 수행해야 하는 Task가 남아 있어 마감 보고를 할 수 없습니다.");
+      return;
+    }
+    if (task === "retry") {
+      await interaction.editReply("작업 현황을 갱신하는 중입니다. 1분 후에 다시 시도해 주세요.");
+      return;
+    }
+    if (task === "missing") {
+      await interaction.editReply("작업 시트에서 이름을 찾지 못했습니다. 닉네임을 확인해 주세요.");
+      return;
+    }
+  }
 
   const message = await channel.send({
     content: `<@${interaction.user.id}>`,
