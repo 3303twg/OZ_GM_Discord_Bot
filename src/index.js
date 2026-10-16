@@ -97,11 +97,23 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isChatInputCommand() && interaction.commandName === "reload") {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const result = await workbook.reloadRoster();
-      if (!result.ok) {
-        await interaction.editReply("원본 명단을 불러오지 못했습니다. 잠시 뒤 다시 시도해 주세요.");
+      if (!result.ok && !result.tasksOk) {
+        await interaction.editReply("원본 명단과 리뷰어 작업 현황을 불러오지 못했습니다. 잠시 뒤 다시 시도해 주세요.");
         return;
       }
-      await interaction.editReply(`원본 명단을 대시보드에 반영했습니다. 현재 ${result.count}명입니다.`);
+      if (!result.ok) {
+        await interaction.editReply("원본 명단을 불러오지 못했습니다. 리뷰어 작업 현황은 다시 읽었습니다.");
+        return;
+      }
+      if (!result.tasksOk) {
+        await interaction.editReply(
+          `원본 명단을 대시보드에 반영했습니다. 현재 ${result.count}명입니다. 리뷰어 작업 현황은 불러오지 못했습니다.`,
+        );
+        return;
+      }
+      await interaction.editReply(
+        `원본 명단을 대시보드에 반영했습니다. 현재 ${result.count}명입니다. 리뷰어 작업 현황도 다시 읽었습니다.`,
+      );
       return;
     }
 
@@ -285,11 +297,11 @@ async function submitReport(interaction) {
       return;
     }
     if (task === "retry") {
-      await interaction.editReply("작업 현황을 갱신하는 중입니다. 1분 후에 다시 시도해 주세요.");
+      await interaction.editReply("데이터 갱신중입니다. 1분 후에 다시 시도해 주세요.");
       return;
     }
     if (task === "missing") {
-      await interaction.editReply("작업 시트에서 이름을 찾지 못했습니다. 닉네임을 확인해 주세요.");
+      await interaction.editReply("마감 가능 여부를 확인하지 못했습니다. 관리자에게 문의해 주세요.");
       return;
     }
   }

@@ -10,6 +10,7 @@ import { displayNameKey, matchScore, pickPerson } from "./match.js";
 import { applyPeoplePatch, mergeDashboard, rosterPeopleFromSheet } from "./sheets.js";
 import {
   decideReviewerClose,
+  decideSaturatedClose,
   lookupReviewerTask,
   parseTaskSheet,
   taskAllowsClose,
@@ -185,6 +186,15 @@ if (decideReviewerClose({ status: "missing", readsInWindow: 30 }) !== "retry") {
 }
 if (decideReviewerClose({ status: "unloaded", readsInWindow: 30 }) !== "retry") {
   throw new Error("빈 캐시에서 30회 이후 재시도 안내로 가지 않았습니다.");
+}
+if (decideSaturatedClose({ status: "pending", cacheLoadedAt: 1, limitMarkedAt: 2, refreshPending: true }) !== "retry") {
+  throw new Error("갱신 예약 중에는 남은 작업 안내로 가면 안 됩니다.");
+}
+if (decideSaturatedClose({ status: "done", cacheLoadedAt: 1, limitMarkedAt: 2, refreshPending: true }) !== "allow") {
+  throw new Error("갱신 예약 중에도 이미 끝난 작업을 막았습니다.");
+}
+if (decideSaturatedClose({ status: "pending", cacheLoadedAt: 5, limitMarkedAt: 2, refreshPending: false }) !== "block") {
+  throw new Error("갱신 뒤에 남은 작업을 통과시켰습니다.");
 }
 
 console.log("확인 완료");

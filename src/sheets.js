@@ -6,6 +6,7 @@ import { pickPerson } from "./match.js";
 import {
   TASK_READ_LIMIT,
   decideReviewerClose,
+  decideSaturatedClose,
   gridOrigin,
   lookupReviewerTask,
   parseTaskSheet,
@@ -145,9 +146,10 @@ export function createWorkbook(config) {
   let rosterDirty = false;
   let flushTimer = null;
   let taskCache = { loaded: false, column: null, people: [], loadedAt: 0 };
-  let taskReadTimes = [];
+  let sheetCallTimes = [];
   let taskRefreshTimer = null;
   let taskColumnWarned = false;
+  let taskSaturatedAt = 0;
   const pending = { logs: [], absences: [], patches: [] };
 
   loadPending();
@@ -240,6 +242,7 @@ export function createWorkbook(config) {
   }
 
   async function request(spreadsheetId, suffix, options = {}) {
+    sheetCallTimes.push(Date.now());
     const client = await auth.getClient();
     const accessToken = await client.getAccessToken();
     const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${suffix}`, {
@@ -725,9 +728,9 @@ export function createWorkbook(config) {
     }
   }
 
-  function taskReadsInWindow(now = Date.now()) {
-    taskReadTimes = taskReadTimes.filter((time) => now - time < TASK_READ_WINDOW_MS);
-    return taskReadTimes.length;
+  function sheetCallsInWindow(now = Date.now()) {
+    sheetCallTimes = sheetCallTimes.filter((time) => now - time < TASK_READ_WINDOW_MS);
+    return sheetCallTimes.length;
   }
 
   function clearTaskRefresh() {
@@ -752,7 +755,6 @@ export function createWorkbook(config) {
   }
 
   async function loadReviewerTasks() {
-    taskReadTimes.push(Date.now());
     const body = await request(config.taskSpreadsheetId, "/values:batchGetByDataFilter", {
       method: "POST",
       body: JSON.stringify({
@@ -789,9 +791,27 @@ export function createWorkbook(config) {
 
   async function reviewClose(nickname) {
     const status = lookupReviewerTask(taskCache, nickname);
+    const reads = sheetCallsInWindow();
+    if (reads >= TASK_READ_LIMIT) {
+      if (!taskSaturatedAt) {
+        taskSaturatedAt = Date.now();
+      }
+      const saturated = decideSaturatedClose({
+        status,
+        cacheLoadedAt: taskCache.loadedAt,
+        limitMarkedAt: taskSaturatedAt,
+        refreshPending: Boolean(taskRefreshTimer),
+      });
+      if (saturated === "retry") {
+        scheduleTaskRefresh();
+        return "retry";
+      }
+      return saturated;
+    }
+    taskSaturatedAt = 0;
     const decision = decideReviewerClose({
       status,
-      readsInWindow: taskReadsInWindow(),
+      readsInWindow: sheetCallsInWindow(),
       cacheFresh: taskCacheFresh(),
       limit: TASK_READ_LIMIT,
     });
@@ -828,18 +848,26 @@ export function createWorkbook(config) {
     },
     reloadRoster() {
       return enqueue(async () => {
+        let rosterOk = false;
+        let tasksOk = false;
         try {
           await refreshAbsenceSchedule(seoulDayKey().replaceAll("-", "."));
           await syncRoster(false, { write: true });
           dashboardReady = true;
-          return { ok: true, count: dashboardCache.length };
+          rosterOk = true;
         } catch (error) {
           console.error("원본 명단 갱신 실패", error);
           if (rosterDirty) {
             armFlush(FLUSH_RETRY_MS);
           }
-          return { ok: false, reason: "failed" };
         }
+        try {
+          await loadReviewerTasks();
+          tasksOk = true;
+        } catch (error) {
+          console.error("리뷰어 작업 현황 갱신 실패", error);
+        }
+        return { ok: rosterOk, tasksOk, count: dashboardCache.length };
       });
     },
     flushNow() {

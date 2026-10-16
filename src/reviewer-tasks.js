@@ -77,6 +77,22 @@ export function lookupReviewerTask(cache, nickname) {
   return taskAllowsClose(person.value) ? "done" : "pending";
 }
 
+export function decideSaturatedClose({ status, cacheLoadedAt = 0, limitMarkedAt = 0, refreshPending = false }) {
+  if (status === "done" || status === "no_column") {
+    return "allow";
+  }
+  if (refreshPending || !cacheLoadedAt || cacheLoadedAt < limitMarkedAt) {
+    return "retry";
+  }
+  if (status === "pending") {
+    return "block";
+  }
+  if (status === "missing") {
+    return "missing";
+  }
+  return "retry";
+}
+
 export function decideReviewerClose({ status, readsInWindow, cacheFresh = false, limit = TASK_READ_LIMIT }) {
   if (status === "done" || status === "no_column") {
     return "allow";
