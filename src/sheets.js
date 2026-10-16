@@ -752,9 +752,9 @@ export function createWorkbook(config) {
 
   async function loadReviewerTasks() {
     taskReadTimes.push(Date.now());
-    const response = await sheets.spreadsheets.values.batchGetByDataFilter({
-      spreadsheetId: config.taskSpreadsheetId,
-      requestBody: {
+    const body = await request(config.taskSpreadsheetId, "/values:batchGetByDataFilter", {
+      method: "POST",
+      body: JSON.stringify({
         dataFilters: [
           {
             gridRange: {
@@ -764,9 +764,10 @@ export function createWorkbook(config) {
             },
           },
         ],
-      },
+        majorDimension: "ROWS",
+      }),
     });
-    const valueRange = response.data.valueRanges?.[0]?.valueRange ?? {};
+    const valueRange = body.valueRanges?.[0]?.valueRange ?? {};
     const origin = gridOrigin(valueRange.range);
     taskCache = parseTaskSheet(valueRange.values ?? [], {
       startRow: origin.startRow,
