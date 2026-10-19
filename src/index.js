@@ -10,8 +10,20 @@ import {
   SlashCommandBuilder,
   StringSelectMenuBuilder,
 } from "discord.js";
-import { getReportChannel, setReportChannel } from "./channels.js";
 import { loadConfig } from "./config.js";
+import {
+  ensureGuild,
+  getGuildChannel,
+  guildSheetsReady,
+  missingGuildSettings,
+  describeGuildSettings,
+  parseSheetLink,
+  readGuild,
+  rosterIndexes,
+  setGuildChannel,
+  setGuildRoster,
+  setGuildSheet,
+} from "./guilds.js";
 import {
   clockTime,
   formatSeoulNow,
@@ -27,7 +39,7 @@ import { findReport } from "./reports.js";
 import { createWorkbook } from "./sheets.js";
 
 const config = loadConfig();
-const workbook = createWorkbook(config);
+const workbooks = new Map();
 
 const panelCommand = new SlashCommandBuilder()
   .setName("pannel")
@@ -60,19 +72,72 @@ const setChannelCommand = new SlashCommandBuilder()
       ),
   );
 
-const commands = [panelCommand.toJSON(), setChannelCommand.toJSON(), flushCommand.toJSON(), reloadCommand.toJSON()];
+const setSheetCommand = new SlashCommandBuilder()
+  .setName("setsheet")
+  .setDescription("이 서버가 사용할 시트 링크를 저장합니다.")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+  .addStringOption((option) =>
+    option
+      .setName("type")
+      .setDescription("저장할 시트")
+      .setRequired(true)
+      .addChoices(
+        { name: "대시보드", value: "dashboard" },
+        { name: "보고로그", value: "log" },
+        { name: "업무불참", value: "absent" },
+        { name: "명단", value: "roster" },
+        { name: "리뷰어작업", value: "task" },
+      ),
+  )
+  .addStringOption((option) =>
+    option.setName("link").setDescription("열려 있는 탭의 구글 시트 주소").setRequired(true),
+  );
+
+const setRosterCommand = new SlashCommandBuilder()
+  .setName("setroster")
+  .setDescription("명단 시트에서 이름, 직무, 근무상태를 읽을 열을 저장합니다.")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
+  .addIntegerOption((option) => option.setName("name").setDescription("이름 열 번호. A열은 1").setRequired(true).setMinValue(1))
+  .addIntegerOption((option) => option.setName("job").setDescription("직무 열 번호. A열은 1").setRequired(true).setMinValue(1))
+  .addIntegerOption((option) =>
+    option.setName("status").setDescription("근무상태 열 번호. A열은 1").setRequired(true).setMinValue(1),
+  )
+  .addIntegerOption((option) =>
+    option.setName("header").setDescription("헤더 행 번호. 비우면 10").setRequired(false).setMinValue(1),
+  )
+  .addStringOption((option) =>
+    option.setName("active").setDescription("대시보드에 넣을 근무상태 값. 비우면 근무중").setRequired(false),
+  );
+
+const settingsCommand = new SlashCommandBuilder()
+  .setName("settings")
+  .setDescription("이 서버의 시트와 채널 설정을 보여 줍니다.")
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels);
+
+const commands = [
+  panelCommand.toJSON(),
+  setChannelCommand.toJSON(),
+  setSheetCommand.toJSON(),
+  settingsCommand.toJSON(),
+  setRosterCommand.toJSON(),
+  flushCommand.toJSON(),
+  reloadCommand.toJSON(),
+];
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const correctionPrompts = new Map();
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`로그인: ${readyClient.user.tag}`);
   for (const guild of readyClient.guilds.cache.values()) {
+    startGuild(guild.id);
     await registerCommands(guild);
   }
-  workbook.startDayWatcher();
 });
 
-client.on(Events.GuildCreate, registerCommands);
+client.on(Events.GuildCreate, async (guild) => {
+  startGuild(guild.id);
+  await registerCommands(guild);
+});
 
 async function registerCommands(guild) {
   try {
@@ -86,7 +151,11 @@ async function registerCommands(guild) {
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === "pannel") {
-      await ensurePanel(interaction.client, interaction.channelId);
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "서버 안에서 실행해 주세요.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      await ensurePanel(interaction.client, interaction.channelId, interaction.guildId, config);
       await interaction.reply({
         content: "현재 채널에 보고 버튼을 올렸습니다.",
         flags: MessageFlags.Ephemeral,
@@ -95,6 +164,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === "reload") {
+      const workbook = workbookFor(interaction);
+      if (!workbook) {
+        await interaction.reply({
+          content: missingSettingsMessage(interaction.guildId),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const result = await workbook.reloadRoster();
       if (!result.ok && !result.tasksOk) {
@@ -118,6 +195,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === "flush") {
+      const workbook = workbookFor(interaction);
+      if (!workbook) {
+        await interaction.reply({
+          content: missingSettingsMessage(interaction.guildId),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const result = await workbook.flushNow();
       if (!result.ok && result.reason === "loading") {
@@ -136,10 +221,71 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.isChatInputCommand() && interaction.commandName === "setchannel") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "서버 안에서 실행해 주세요.", flags: MessageFlags.Ephemeral });
+        return;
+      }
       const type = interaction.options.getString("type", true);
-      setReportChannel(type, interaction.channelId);
+      setGuildChannel(interaction.guildId, config, type, interaction.channelId);
       await interaction.reply({
         content: `${type} 보고 채널을 <#${interaction.channelId}>로 설정했습니다.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === "settings") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "서버 안에서 실행해 주세요.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const settings = readGuild(interaction.guildId, config);
+      await interaction.reply({
+        content: describeGuildSettings(settings),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === "setsheet") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "서버 안에서 실행해 주세요.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const type = interaction.options.getString("type", true);
+      const link = interaction.options.getString("link", true);
+      const saved = setGuildSheet(interaction.guildId, config, type, link);
+      if (!saved) {
+        await interaction.reply({
+          content: "시트 주소를 읽지 못했습니다. 탭이 열린 주소에 gid= 번호가 있어야 합니다.",
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      resetWorkbook(interaction.guildId);
+      const parsed = parseSheetLink(link);
+      await interaction.reply({
+        content: `${sheetTypeLabel(type)} 시트를 이 서버 설정에 넣었습니다. 탭 번호는 ${parsed.sheetId}입니다.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (interaction.isChatInputCommand() && interaction.commandName === "setroster") {
+      if (!interaction.guildId) {
+        await interaction.reply({ content: "서버 안에서 실행해 주세요.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const saved = setGuildRoster(interaction.guildId, config, {
+        nameColumn: interaction.options.getInteger("name", true),
+        jobColumn: interaction.options.getInteger("job", true),
+        statusColumn: interaction.options.getInteger("status", true),
+        headerRow: interaction.options.getInteger("header") ?? 10,
+        activeStatus: interaction.options.getString("active") || "근무중",
+      });
+      resetWorkbook(interaction.guildId);
+      await interaction.reply({
+        content: `명단은 ${saved.roster.headerRow}행 헤더에서 이름 ${saved.roster.nameColumn}열, 직무 ${saved.roster.jobColumn}열, 근무상태 ${saved.roster.statusColumn}열을 읽습니다. 넣을 값은 ${saved.roster.activeStatus}입니다.`,
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -239,6 +385,14 @@ async function submitReport(interaction) {
     : openedDate;
   const content = interaction.fields.getTextInputValue("content").trim();
   const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
+  const workbook = workbookFor(interaction);
+  if (!workbook) {
+    await interaction.reply({
+      content: missingSettingsMessage(interaction.guildId),
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
   if (!workbook.isDashboardReady()) {
     await interaction.reply({
       content: "대시보드 명단을 불러오는 중입니다. 잠시 뒤 다시 시도해 주세요.",
@@ -247,6 +401,7 @@ async function submitReport(interaction) {
     return;
   }
   const role = workbook.roleForNickname(nickname);
+  const guild = readGuild(interaction.guildId, config);
 
   if (report.correctionChoice && !correctionTime) {
     await interaction.reply({
@@ -262,7 +417,7 @@ async function submitReport(interaction) {
     });
     return;
   }
-  if (!role || !config.roles.includes(role)) {
+  if (!role || !guild.roles.includes(role)) {
     await interaction.reply({
       content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
       flags: MessageFlags.Ephemeral,
@@ -280,11 +435,12 @@ async function submitReport(interaction) {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const channelType = report.correctionChoice ? correctionType : report.channelType ?? report.id;
-  const channelId = getReportChannel(channelType);
-  if (!channelId) {
-    await interaction.editReply(`/setchannel 명령으로 ${channelType} 채널을 먼저 설정해 주세요.`);
+  const missing = missingSettingsMessage(interaction.guildId, channelType);
+  if (missing) {
+    await interaction.editReply(missing);
     return;
   }
+  const channelId = getGuildChannel(interaction.guildId, channelType);
   const channel = await interaction.client.channels.fetch(channelId);
   if (!channel?.isTextBased()) {
     await interaction.editReply("결과를 올릴 채널을 찾지 못했습니다. 채널 ID 설정을 확인해 주세요.");
@@ -383,6 +539,14 @@ async function submitReport(interaction) {
 }
 
 async function roleFromDashboard(interaction) {
+  const workbook = workbookFor(interaction);
+  if (!workbook) {
+    await interaction.reply({
+      content: missingSettingsMessage(interaction.guildId),
+      flags: MessageFlags.Ephemeral,
+    });
+    return null;
+  }
   if (!workbook.isDashboardReady()) {
     await interaction.reply({
       content: "대시보드 명단을 불러오는 중입니다. 잠시 뒤 다시 눌러 주세요.",
@@ -392,7 +556,8 @@ async function roleFromDashboard(interaction) {
   }
   const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
   const role = workbook.roleForNickname(nickname);
-  if (!role || !config.roles.includes(role)) {
+  const guild = readGuild(interaction.guildId, config);
+  if (!role || !guild.roles.includes(role)) {
     await interaction.reply({
       content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
       flags: MessageFlags.Ephemeral,
@@ -445,6 +610,76 @@ async function replyError(interaction, content) {
     return;
   }
   await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+}
+
+function startGuild(guildId) {
+  ensureGuild(guildId, config);
+  workbookFor({ guildId });
+}
+
+function workbookFor(interaction) {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    return null;
+  }
+  const settings = ensureGuild(guildId, config);
+  if (!guildSheetsReady(settings)) {
+    return null;
+  }
+  const existing = workbooks.get(guildId);
+  if (existing) {
+    return existing;
+  }
+  const workbook = createWorkbook({
+    ...config,
+    guildId,
+    spreadsheetId: settings.sheets.logSpreadsheetId,
+    logSheetId: Number(settings.sheets.logSheetId),
+    dashboardSpreadsheetId: settings.sheets.dashboardSpreadsheetId,
+    dashboardSheetId: Number(settings.sheets.dashboardSheetId),
+    absenceSpreadsheetId: settings.sheets.absenceSpreadsheetId,
+    absenceSheetId:
+      settings.sheets.absenceSheetId == null || settings.sheets.absenceSheetId === ""
+        ? null
+        : Number(settings.sheets.absenceSheetId),
+    rosterSpreadsheetId: settings.sheets.rosterSpreadsheetId,
+    rosterSheetId: Number(settings.sheets.rosterSheetId),
+    taskSpreadsheetId: settings.sheets.taskSpreadsheetId,
+    taskSheetId: Number(settings.sheets.taskSheetId),
+    roster: rosterIndexes(settings.roster),
+    roles: settings.roles,
+  });
+  workbook.stop = workbook.startDayWatcher();
+  workbooks.set(guildId, workbook);
+  return workbook;
+}
+
+function resetWorkbook(guildId) {
+  const existing = workbooks.get(guildId);
+  existing?.stop?.();
+  workbooks.delete(guildId);
+  return workbookFor({ guildId });
+}
+
+function sheetTypeLabel(type) {
+  return {
+    dashboard: "대시보드",
+    log: "보고로그",
+    absent: "업무불참",
+    roster: "명단",
+    task: "리뷰어 작업",
+  }[type];
+}
+
+function missingSettingsMessage(guildId, channelType) {
+  if (!guildId) {
+    return "서버 안에서 실행해 주세요.";
+  }
+  const missing = missingGuildSettings(readGuild(guildId, config), { channelType });
+  if (missing.length === 0) {
+    return null;
+  }
+  return `없는 설정: ${missing.join(", ")}. /settings 에서 확인하고 /setsheet, /setroster, /setchannel 로 넣어 주세요.`;
 }
 
 await client.login(config.token);

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { GoogleAuth } from "google-auth-library";
 import { formatSeoulNow, seoulDayKey } from "./format.js";
+import { guildStatePaths } from "./guilds.js";
 import { pickPerson } from "./match.js";
 import {
   TASK_READ_LIMIT,
@@ -49,24 +50,36 @@ const FLUSH_RETRY_MS = 60_000;
 const ROSTER_REFRESH_MS = 5 * 60_000;
 const TASK_READ_WINDOW_MS = 60_000;
 const TASK_REFRESH_DELAY_MS = 60_000;
-const statePath = path.resolve("data/dashboard-day.json");
-const pendingPath = path.resolve("data/pending-writes.json");
-const ROSTER_HEADER_ROW = 10;
-const ROSTER_NAME_INDEX = 1;
-const ROSTER_JOB_INDEX = 3;
-const ROSTER_STATUS_INDEX = 7;
+let sheetCallTimes = [];
+const DEFAULT_ROSTER = {
+  headerRow: 10,
+  nameIndex: 1,
+  jobIndex: 3,
+  statusIndex: 7,
+  activeStatus: "근무중",
+};
 
-export function rosterPeopleFromSheet(values) {
-  const headerIndex = rosterHeaderIndex(values);
+function noteSheetCall(now = Date.now()) {
+  sheetCallTimes.push(now);
+}
+
+function sheetCallsInWindow(now = Date.now()) {
+  sheetCallTimes = sheetCallTimes.filter((time) => now - time < TASK_READ_WINDOW_MS);
+  return sheetCallTimes.length;
+}
+
+export function rosterPeopleFromSheet(values, roster = DEFAULT_ROSTER) {
+  const headerIndex = rosterHeaderIndex(values, roster);
   if (headerIndex < 0) {
     return [];
   }
+  const activeStatus = String(roster.activeStatus).replace(/\s+/g, "");
   const people = new Map();
   for (const row of values.slice(headerIndex + 1)) {
-    const name = String(row[ROSTER_NAME_INDEX] ?? "").trim();
-    const job = String(row[ROSTER_JOB_INDEX] ?? "").trim();
-    const employment = String(row[ROSTER_STATUS_INDEX] ?? "").replace(/\s+/g, "");
-    if (!name || employment !== "근무중" || people.has(name)) {
+    const name = String(row[roster.nameIndex] ?? "").trim();
+    const job = String(row[roster.jobIndex] ?? "").trim();
+    const employment = String(row[roster.statusIndex] ?? "").replace(/\s+/g, "");
+    if (!name || employment !== activeStatus || people.has(name)) {
       continue;
     }
     people.set(name, { name, job });
@@ -74,17 +87,17 @@ export function rosterPeopleFromSheet(values) {
   return [...people.values()];
 }
 
-function rosterHeaderIndex(values) {
-  const marked = values[ROSTER_HEADER_ROW - 1] ?? [];
-  if (isRosterHeader(marked)) {
-    return ROSTER_HEADER_ROW - 1;
+function rosterHeaderIndex(values, roster) {
+  const marked = values[roster.headerRow - 1] ?? [];
+  if (isRosterHeader(marked, roster)) {
+    return roster.headerRow - 1;
   }
-  return values.findIndex((row) => isRosterHeader(row));
+  return values.findIndex((row) => isRosterHeader(row, roster));
 }
 
-function isRosterHeader(row) {
-  const name = String(row[ROSTER_NAME_INDEX] ?? "").replace(/\s+/g, "");
-  const status = String(row[ROSTER_STATUS_INDEX] ?? "").replace(/\s+/g, "");
+function isRosterHeader(row, roster) {
+  const name = String(row[roster.nameIndex] ?? "").replace(/\s+/g, "");
+  const status = String(row[roster.statusIndex] ?? "").replace(/\s+/g, "");
   return name.includes("이름") && status.includes("근무");
 }
 
@@ -130,6 +143,11 @@ export function mergeDashboard(roster, current, { resetTimes, absentNames, now }
 }
 
 export function createWorkbook(config) {
+  const roster = { ...DEFAULT_ROSTER, ...config.roster };
+  const logSpreadsheetId = config.spreadsheetId;
+  const dashboardSpreadsheetId = config.dashboardSpreadsheetId || logSpreadsheetId;
+  const absenceSpreadsheetId = config.absenceSpreadsheetId || logSpreadsheetId;
+  const { pendingPath, dayPath: statePath } = guildStatePaths(config.guildId || "default");
   const auth = new GoogleAuth({
     keyFile: config.serviceAccountPath,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -146,7 +164,6 @@ export function createWorkbook(config) {
   let rosterDirty = false;
   let flushTimer = null;
   let taskCache = { loaded: false, column: null, people: [], loadedAt: 0 };
-  let sheetCallTimes = [];
   let taskRefreshTimer = null;
   let taskColumnWarned = false;
   let taskSaturatedAt = 0;
@@ -242,7 +259,7 @@ export function createWorkbook(config) {
   }
 
   async function request(spreadsheetId, suffix, options = {}) {
-    sheetCallTimes.push(Date.now());
+    noteSheetCall();
     const client = await auth.getClient();
     const accessToken = await client.getAccessToken();
     const response = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}${suffix}`, {
@@ -327,7 +344,7 @@ export function createWorkbook(config) {
   }
 
   async function formatDashboard() {
-    await request(config.spreadsheetId, ":batchUpdate", {
+    await request(dashboardSpreadsheetId, ":batchUpdate", {
       method: "POST",
       body: JSON.stringify({
         requests: [
@@ -415,9 +432,9 @@ export function createWorkbook(config) {
   }
 
   async function readDashboardSheet() {
-    const dashboardTitle = await sheetTitle(config.spreadsheetId, config.dashboardSheetId);
-    await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1", "dashboard");
-    return dashboardRows(await readValues(config.spreadsheetId, dashboardTitle, "A:H"));
+    const dashboardTitle = await sheetTitle(dashboardSpreadsheetId, config.dashboardSheetId);
+    await ensureHeader(dashboardSpreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1", "dashboard");
+    return dashboardRows(await readValues(dashboardSpreadsheetId, dashboardTitle, "A:H"));
   }
 
   async function loadRoster() {
@@ -429,7 +446,7 @@ export function createWorkbook(config) {
             gridRange: {
               sheetId: config.rosterSheetId,
               startColumnIndex: 0,
-              endColumnIndex: ROSTER_STATUS_INDEX + 1,
+              endColumnIndex: Math.max(roster.nameIndex, roster.jobIndex, roster.statusIndex) + 1,
             },
           },
         ],
@@ -437,19 +454,19 @@ export function createWorkbook(config) {
       }),
     });
     const values = body.valueRanges?.[0]?.valueRange?.values ?? [];
-    return rosterPeopleFromSheet(values);
+    return rosterPeopleFromSheet(values, roster);
   }
 
   async function writeDashboard(people) {
-    const dashboardTitle = await sheetTitle(config.spreadsheetId, config.dashboardSheetId);
-    await ensureHeader(config.spreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1", "dashboard");
-    await writeValues(config.spreadsheetId, dashboardTitle, `A1:H${Math.max(people.length + 1, 1)}`, [
+    const dashboardTitle = await sheetTitle(dashboardSpreadsheetId, config.dashboardSheetId);
+    await ensureHeader(dashboardSpreadsheetId, dashboardTitle, DASHBOARD_HEADERS, "A1:H1", "dashboard");
+    await writeValues(dashboardSpreadsheetId, dashboardTitle, `A1:H${Math.max(people.length + 1, 1)}`, [
       DASHBOARD_HEADERS,
       ...people.map(toCells),
     ]);
     await formatDashboard();
     if (lastDashboardSize === null || people.length < lastDashboardSize) {
-      await clearValues(config.spreadsheetId, dashboardTitle, `A${people.length + 2}:H1000`);
+      await clearValues(dashboardSpreadsheetId, dashboardTitle, `A${people.length + 2}:H1000`);
     }
     lastDashboardSize = people.length;
     await refreshDashboardFilter(people.length);
@@ -458,7 +475,7 @@ export function createWorkbook(config) {
   async function refreshDashboardFilter(rowCount) {
     try {
       const metadata = await request(
-        config.spreadsheetId,
+        dashboardSpreadsheetId,
         "?fields=sheets(properties.sheetId,basicFilter(range,sortSpecs,criteria,filterSpecs))",
       );
       const sheet = metadata.sheets?.find((item) => item.properties.sheetId === config.dashboardSheetId);
@@ -473,7 +490,7 @@ export function createWorkbook(config) {
         startColumnIndex: filter.range?.startColumnIndex ?? 0,
         endColumnIndex: Math.max(filter.range?.endColumnIndex ?? 0, 8),
       };
-      await request(config.spreadsheetId, ":batchUpdate", {
+      await request(dashboardSpreadsheetId, ":batchUpdate", {
         method: "POST",
         body: JSON.stringify({
           requests: [
@@ -518,10 +535,10 @@ export function createWorkbook(config) {
     }
   }
 
-  async function appendRows(title, headerKey, headers, headerRange, columns, rows) {
-    await ensureHeader(config.spreadsheetId, title, headers, headerRange, headerKey);
+  async function appendRows(spreadsheetId, title, headerKey, headers, headerRange, columns, rows) {
+    await ensureHeader(spreadsheetId, title, headers, headerRange, headerKey);
     await request(
-      config.spreadsheetId,
+      spreadsheetId,
       `/values/${rangeOf(title, columns)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
       { method: "POST", body: JSON.stringify({ values: rows }) },
     );
@@ -532,20 +549,23 @@ export function createWorkbook(config) {
     if (!rows.length) {
       return 0;
     }
-    const title = await sheetTitle(config.spreadsheetId, config.logSheetId);
-    await appendRows(title, "log", LOG_HEADERS, "A1:I1", "A:I", rows);
+    const title = await sheetTitle(logSpreadsheetId, config.logSheetId);
+    await appendRows(logSpreadsheetId, title, "log", LOG_HEADERS, "A1:I1", "A:I", rows);
     pending.logs.splice(0, rows.length);
     persistPending();
     return rows.length;
   }
 
   async function writeQueuedAbsences() {
+    if (config.absenceSheetId == null || config.absenceSheetId === "") {
+      return 0;
+    }
     const rows = pending.absences.slice();
     if (!rows.length) {
       return 0;
     }
-    const title = await ensureSheetByTitle(config.spreadsheetId, ABSENCE_SHEET_TITLE);
-    await appendRows(title, "absence", ABSENCE_HEADERS, "A1:G1", "A:G", rows);
+    const title = await absenceTitle();
+    await appendRows(absenceSpreadsheetId, title, "absence", ABSENCE_HEADERS, "A1:G1", "A:G", rows);
     pending.absences.splice(0, rows.length);
     persistPending();
     return rows.length;
@@ -602,10 +622,20 @@ export function createWorkbook(config) {
     }
   }
 
+  async function absenceTitle() {
+    if (config.absenceSheetId == null || config.absenceSheetId === "") {
+      return ensureSheetByTitle(absenceSpreadsheetId, ABSENCE_SHEET_TITLE);
+    }
+    return sheetTitle(absenceSpreadsheetId, Number(config.absenceSheetId));
+  }
+
   async function refreshAbsenceSchedule(targetDate) {
-    const title = await ensureSheetByTitle(config.spreadsheetId, ABSENCE_SHEET_TITLE);
-    await ensureHeader(config.spreadsheetId, title, ABSENCE_HEADERS, "A1:G1", "absence");
-    const rows = await readValues(config.spreadsheetId, title, "A:G");
+    if (config.absenceSheetId == null || config.absenceSheetId === "") {
+      return;
+    }
+    const title = await absenceTitle();
+    await ensureHeader(absenceSpreadsheetId, title, ABSENCE_HEADERS, "A1:G1", "absence");
+    const rows = await readValues(absenceSpreadsheetId, title, "A:G");
     const entries = rows.slice(1);
     const active = entries.filter((row) => {
       const absenceDate = String(row[3] ?? "").trim();
@@ -613,8 +643,8 @@ export function createWorkbook(config) {
     });
 
     if (active.length !== entries.length) {
-      await writeValues(config.spreadsheetId, title, `A1:G${active.length + 1}`, [ABSENCE_HEADERS, ...active]);
-      await clearValues(config.spreadsheetId, title, `A${active.length + 2}:G${entries.length + 1}`);
+      await writeValues(absenceSpreadsheetId, title, `A1:G${active.length + 1}`, [ABSENCE_HEADERS, ...active]);
+      await clearValues(absenceSpreadsheetId, title, `A${active.length + 2}:G${entries.length + 1}`);
     }
 
     todayAbsenceNames = new Set(
@@ -728,11 +758,6 @@ export function createWorkbook(config) {
     }
   }
 
-  function sheetCallsInWindow(now = Date.now()) {
-    sheetCallTimes = sheetCallTimes.filter((time) => now - time < TASK_READ_WINDOW_MS);
-    return sheetCallTimes.length;
-  }
-
   function clearTaskRefresh() {
     if (!taskRefreshTimer) {
       return;
@@ -844,6 +869,9 @@ export function createWorkbook(config) {
       return picked.status === "found" ? dashboardCache[picked.index].job : null;
     },
     checkReviewerClose(nickname) {
+      if (!config.taskSpreadsheetId) {
+        return Promise.resolve("allow");
+      }
       return enqueue(() => reviewClose(nickname));
     },
     reloadRoster() {
@@ -929,6 +957,10 @@ export function createWorkbook(config) {
         enqueue(() => refreshRoster()).catch((error) => console.error("대시보드 명단 갱신 실패", error));
       }, ROSTER_REFRESH_MS);
       rosterTimer.unref?.();
+      return () => {
+        clearInterval(dayTimer);
+        clearInterval(rosterTimer);
+      };
     },
   };
 }

@@ -7,6 +7,7 @@ import {
   toBulletList,
 } from "./format.js";
 import { displayNameKey, matchScore, pickPerson } from "./match.js";
+import { createGuildSettings, describeGuildSettings, parseSheetLink, rosterIndexes } from "./guilds.js";
 import { applyPeoplePatch, mergeDashboard, rosterPeopleFromSheet } from "./sheets.js";
 import {
   decideReviewerClose,
@@ -149,6 +150,41 @@ if (
   unifiedRoster[1].job !== "디자인 러닝헬퍼"
 ) {
   throw new Error("통합 명단에서 근무중 인원과 직무를 읽지 못했습니다.");
+}
+const shiftedRoster = rosterPeopleFromSheet(
+  [
+    ["이름", "직무", "근무상태"],
+    ["김이동", "리뷰어", "근무중"],
+  ],
+  rosterIndexes({ headerRow: 1, nameColumn: 1, jobColumn: 2, statusColumn: 3, activeStatus: "근무중" }),
+);
+if (shiftedRoster.length !== 1 || shiftedRoster[0].job !== "리뷰어") {
+  throw new Error("명단 열 위치 설정으로 사람을 읽지 못했습니다.");
+}
+const blankServer = createGuildSettings({ roles: ["리뷰어"] });
+if (blankServer.sheets.logSpreadsheetId || blankServer.channels.daily || blankServer.roster.nameColumn) {
+  throw new Error("새 서버 설정이 비어 있지 않습니다.");
+}
+const describedBlank = describeGuildSettings(blankServer);
+if (!describedBlank.includes("대시보드: 없음") || !describedBlank.includes("명단 열: 없음")) {
+  throw new Error("빈 설정을 없음으로 보여 주지 못했습니다.");
+}
+const parsedLink = parseSheetLink(
+  "https://docs.google.com/spreadsheets/d/abc123_DEF/edit?gid=2114634129#gid=2114634129",
+);
+if (parsedLink?.spreadsheetId !== "abc123_DEF" || parsedLink.sheetId !== 2114634129) {
+  throw new Error("시트 링크에서 파일과 탭 번호를 읽지 못했습니다.");
+}
+if (parseSheetLink("https://docs.google.com/spreadsheets/d/abc123_DEF/edit")) {
+  throw new Error("탭 번호가 없는 시트 링크를 통과시켰습니다.");
+}
+const described = describeGuildSettings({
+  channels: { daily: "daily-channel", close: null, absent: null },
+  sheets: { logSpreadsheetId: "log", logSheetId: 1 },
+  roster: { headerRow: 10, nameColumn: 2, jobColumn: 4, statusColumn: 8, activeStatus: "근무중" },
+});
+if (!described.includes("daily-channel") || !described.includes("/spreadsheets/d/log/edit?gid=1")) {
+  throw new Error("서버 설정 안내가 채널과 시트 주소를 빠뜨렸습니다.");
 }
 
 const taskRows = Array.from({ length: 13 }, () => []);

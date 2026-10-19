@@ -1,9 +1,6 @@
-import fs from "node:fs";
-import path from "node:path";
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { getGuildPanel, setGuildPanel } from "./guilds.js";
 import { REPORTS } from "./reports.js";
-
-const panelFile = path.resolve("data/panel.json");
 
 export function panelPayload() {
   const rows = REPORTS.map((report) =>
@@ -27,26 +24,14 @@ export function panelPayload() {
   };
 }
 
-function readPanelId() {
-  if (!fs.existsSync(panelFile)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(panelFile, "utf8"));
-}
-
-function writePanelId(channelId, messageId) {
-  fs.mkdirSync(path.dirname(panelFile), { recursive: true });
-  fs.writeFileSync(panelFile, JSON.stringify({ channelId, messageId }, null, 2));
-}
-
-export async function ensurePanel(client, panelChannelId) {
+export async function ensurePanel(client, panelChannelId, guildId, envConfig) {
   const channel = await client.channels.fetch(panelChannelId);
   if (!channel?.isTextBased()) {
     throw new Error("현재 채널에 메시지를 보낼 수 없습니다.");
   }
 
   const payload = panelPayload();
-  const saved = readPanelId();
+  const saved = getGuildPanel(guildId);
   if (saved?.channelId === panelChannelId && saved.messageId) {
     try {
       const message = await channel.messages.fetch(saved.messageId);
@@ -58,6 +43,6 @@ export async function ensurePanel(client, panelChannelId) {
   }
 
   const message = await channel.send(payload);
-  writePanelId(panelChannelId, message.id);
+  setGuildPanel(guildId, envConfig, panelChannelId, message.id);
   return message;
 }
