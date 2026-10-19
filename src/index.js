@@ -401,7 +401,6 @@ async function submitReport(interaction) {
     return;
   }
   const role = workbook.roleForNickname(nickname);
-  const guild = readGuild(interaction.guildId, config);
 
   if (report.correctionChoice && !correctionTime) {
     await interaction.reply({
@@ -417,7 +416,7 @@ async function submitReport(interaction) {
     });
     return;
   }
-  if (!role || !guild.roles.includes(role)) {
+  if (!role) {
     await interaction.reply({
       content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
       flags: MessageFlags.Ephemeral,
@@ -446,7 +445,7 @@ async function submitReport(interaction) {
     await interaction.editReply("결과를 올릴 채널을 찾지 못했습니다. 채널 ID 설정을 확인해 주세요.");
     return;
   }
-  if (report.id === "close" && role === "리뷰어") {
+  if (report.id === "close" && config.roles.includes(role)) {
     const task = await workbook.checkReviewerClose(nickname);
     if (task === "block") {
       await interaction.editReply(
@@ -556,8 +555,7 @@ async function roleFromDashboard(interaction) {
   }
   const nickname = interaction.member?.displayName || interaction.user.globalName || interaction.user.username;
   const role = workbook.roleForNickname(nickname);
-  const guild = readGuild(interaction.guildId, config);
-  if (!role || !guild.roles.includes(role)) {
+  if (!role) {
     await interaction.reply({
       content: "대시보드에서 닉네임과 일치하는 역할을 찾지 못했습니다.",
       flags: MessageFlags.Ephemeral,

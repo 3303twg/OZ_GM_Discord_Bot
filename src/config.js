@@ -20,11 +20,8 @@ export function loadConfig() {
 
   const rolesPath = path.resolve("config/roles.json");
   const roles = JSON.parse(fs.readFileSync(rolesPath, "utf8"));
-  if (!Array.isArray(roles) || roles.length === 0 || roles.some((role) => typeof role !== "string")) {
-    throw new Error("config/roles.json은 역할 이름 문자열 배열이어야 합니다.");
-  }
-  if (roles.length > 25) {
-    throw new Error("역할은 드롭다운 제한 때문에 25개까지 넣을 수 있습니다.");
+  if (!Array.isArray(roles) || roles.some((role) => typeof role !== "string" || !role.trim())) {
+    throw new Error("config/roles.json은 예외 직무 이름 문자열 배열이어야 합니다.");
   }
 
   return {

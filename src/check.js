@@ -161,6 +161,16 @@ const shiftedRoster = rosterPeopleFromSheet(
 if (shiftedRoster.length !== 1 || shiftedRoster[0].job !== "리뷰어") {
   throw new Error("명단 열 위치 설정으로 사람을 읽지 못했습니다.");
 }
+const plainHeaderRoster = rosterPeopleFromSheet(
+  [
+    ["이름", "직무", "상태"],
+    ["송준호", "백수", "근무중"],
+  ],
+  rosterIndexes({ headerRow: 1, nameColumn: 1, jobColumn: 2, statusColumn: 3, activeStatus: "근무중" }),
+);
+if (plainHeaderRoster.length !== 1 || plainHeaderRoster[0].name !== "송준호" || plainHeaderRoster[0].job !== "백수") {
+  throw new Error("헤더 글자가 달라도 지정한 행과 열에서 사람을 읽지 못했습니다.");
+}
 const blankServer = createGuildSettings({ roles: ["리뷰어"] });
 if (blankServer.sheets.logSpreadsheetId || blankServer.channels.daily || blankServer.roster.nameColumn) {
   throw new Error("새 서버 설정이 비어 있지 않습니다.");

@@ -69,8 +69,8 @@ function sheetCallsInWindow(now = Date.now()) {
 }
 
 export function rosterPeopleFromSheet(values, roster = DEFAULT_ROSTER) {
-  const headerIndex = rosterHeaderIndex(values, roster);
-  if (headerIndex < 0) {
+  const headerIndex = Number(roster.headerRow) - 1;
+  if (!Number.isInteger(headerIndex) || headerIndex < 0) {
     return [];
   }
   const activeStatus = String(roster.activeStatus).replace(/\s+/g, "");
@@ -85,20 +85,6 @@ export function rosterPeopleFromSheet(values, roster = DEFAULT_ROSTER) {
     people.set(name, { name, job });
   }
   return [...people.values()];
-}
-
-function rosterHeaderIndex(values, roster) {
-  const marked = values[roster.headerRow - 1] ?? [];
-  if (isRosterHeader(marked, roster)) {
-    return roster.headerRow - 1;
-  }
-  return values.findIndex((row) => isRosterHeader(row, roster));
-}
-
-function isRosterHeader(row, roster) {
-  const name = String(row[roster.nameIndex] ?? "").replace(/\s+/g, "");
-  const status = String(row[roster.statusIndex] ?? "").replace(/\s+/g, "");
-  return name.includes("이름") && status.includes("근무");
 }
 
 export function applyPeoplePatch(people, nickname, patch) {
