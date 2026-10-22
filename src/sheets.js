@@ -574,10 +574,21 @@ export function createWorkbook(config) {
     return true;
   }
 
+  function queuedPeople() {
+    const names = [
+      ...pending.logs.map((row) => row[2]),
+      ...pending.absences.map((row) => row[1]),
+      ...pending.patches.map((item) => item.nickname),
+    ];
+    return [...new Set(names.map((name) => String(name ?? "").trim()).filter(Boolean))];
+  }
+
   async function flushPending() {
     if (!hasSheetWork()) {
       return { ok: true, logCount: 0, absenceCount: 0, dashboardWritten: false };
     }
+    const people = queuedPeople();
+    const peopleText = people.length > 0 ? ` 대상: ${people.join(", ")}` : "";
     let logCount = 0;
     let absenceCount = 0;
     let dashboardWritten = false;
@@ -586,14 +597,14 @@ export function createWorkbook(config) {
       absenceCount = await writeQueuedAbsences();
       dashboardWritten = await writeQueuedDashboard();
     } catch (error) {
-      console.error("시트 일괄 기록 실패", error);
+      console.error(`시트 일괄 기록 실패${peopleText}`, error);
       return { ok: false, logCount, absenceCount, dashboardWritten };
     }
     const parts = [`로그 ${logCount}건`, `불참 ${absenceCount}건`];
     if (dashboardWritten) {
       parts.push("대시보드 갱신");
     }
-    console.log(`시트 일괄 기록: ${parts.join(", ")}`);
+    console.log(`시트 일괄 기록: ${parts.join(", ")}${peopleText}`);
     return { ok: true, logCount, absenceCount, dashboardWritten };
   }
 
@@ -836,7 +847,7 @@ export function createWorkbook(config) {
     try {
       await loadReviewerTasks();
     } catch (error) {
-      console.error("리뷰어 작업 현황을 읽지 못했습니다.", error);
+      console.error(`리뷰어 작업 현황을 읽지 못했습니다. ${nickname}`, error);
       return status === "pending" ? "block" : "allow";
     }
     const next = lookupReviewerTask(taskCache, nickname);

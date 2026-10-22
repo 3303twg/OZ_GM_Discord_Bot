@@ -1,6 +1,7 @@
 import { buildModal } from "./modal.js";
 import {
   clockTime,
+  formatLogTime,
   normalizeClockTime,
   normalizeMonthDay,
   normalizeReportDate,
@@ -61,6 +62,9 @@ if (bullets !== "• GM-006 과제 완료 및 리뷰\n• 추가 확인") {
   throw new Error(`글머리표 변환 결과가 예상과 다릅니다: ${bullets}`);
 }
 
+if (formatLogTime(new Date("2026-10-22T00:54:07Z")) !== "2026-10-22 09:54:07") {
+  throw new Error("로그 시각이 한국 시간 초 단위가 아닙니다.");
+}
 if (clockTime("2026.09.29 13:05") !== "13:05") {
   throw new Error("시각 추출에 실패했습니다.");
 }

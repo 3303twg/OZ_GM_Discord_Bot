@@ -1,3 +1,4 @@
+import "./log.js";
 import "dotenv/config";
 import {
   ActionRowBuilder,
@@ -149,6 +150,9 @@ async function registerCommands(guild) {
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  const actor = actorLabel(interaction);
+  const attempt = attemptLabel(interaction);
+  console.log(`시도: ${actor} ${attempt}`);
   try {
     if (interaction.isChatInputCommand() && interaction.commandName === "pannel") {
       if (!interaction.guildId) {
@@ -345,7 +349,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await submitReport(interaction);
     }
   } catch (error) {
-    console.error(error);
+    console.error(`실패: ${actor} ${attempt}`, error);
     await replyError(interaction, "처리 중 오류가 났습니다. 잠시 뒤 다시 시도해 주세요.");
   }
 });
@@ -529,7 +533,7 @@ async function submitReport(interaction) {
       console.warn(`대시보드 닉네임 반영 안 됨: ${nickname} (${attendance})`);
     }
   } catch (error) {
-    console.error("보고 대기열 기록 실패", error);
+    console.error(`보고 대기열 기록 실패: ${nickname}`, error);
   }
   if (report.correctionChoice) {
     await deleteCorrectionPrompt(interaction);
@@ -608,6 +612,35 @@ async function replyError(interaction, content) {
     return;
   }
   await interaction.reply({ content, flags: MessageFlags.Ephemeral }).catch(() => {});
+}
+
+function actorLabel(interaction) {
+  const name = interaction.member?.displayName || interaction.user?.globalName || interaction.user?.username || "알 수 없음";
+  const guild = interaction.guild?.name ?? "개인 메시지";
+  return `${name} (${interaction.user?.id ?? "-"}) @${guild}`;
+}
+
+function attemptLabel(interaction) {
+  if (interaction.isChatInputCommand()) {
+    const options = interaction.options.data.map((option) => `${option.name}=${option.value}`).join(" ");
+    return `/${interaction.commandName}${options ? ` ${options}` : ""}`;
+  }
+  if (interaction.isButton() && interaction.customId.startsWith("report:")) {
+    const report = findReport(interaction.customId.slice("report:".length));
+    return report?.buttonLabel ?? interaction.customId;
+  }
+  if (interaction.isStringSelectMenu() && interaction.customId === "correction:type") {
+    return interaction.values[0] === "daily" ? "업무 보고 정정 선택" : "업무 마감 정정 선택";
+  }
+  if (interaction.isModalSubmit() && interaction.customId.startsWith("modal:")) {
+    const [, reportId, , correctionType] = interaction.customId.split(":");
+    const report = findReport(reportId);
+    if (report?.correctionChoice) {
+      return correctionType === "daily" ? "업무 보고 정정 전송" : "업무 마감 정정 전송";
+    }
+    return `${report?.buttonLabel ?? "보고"} 전송`;
+  }
+  return interaction.customId || "상호작용";
 }
 
 function startGuild(guildId) {

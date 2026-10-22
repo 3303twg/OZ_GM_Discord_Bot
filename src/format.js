@@ -6,6 +6,7 @@ function seoulParts(date = new Date()) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
+    second: "2-digit",
     hourCycle: "h23",
   }).formatToParts(date);
   const value = (type) => parts.find((part) => part.type === type)?.value ?? "";
@@ -15,12 +16,18 @@ function seoulParts(date = new Date()) {
     day: value("day"),
     hour: value("hour"),
     minute: value("minute"),
+    second: value("second"),
   };
 }
 
 export function formatSeoulNow(date = new Date()) {
   const parts = seoulParts(date);
   return `${parts.year}.${parts.month}.${parts.day} ${parts.hour}:${parts.minute}`;
+}
+
+export function formatLogTime(date = new Date()) {
+  const parts = seoulParts(date);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 export function seoulDayKey(date = new Date()) {
